@@ -811,6 +811,7 @@ namespace MonoDevelop.Ide.Gui
 			
 			InstallMenuBar ();
 			Realize ();
+			Add (fullViewVBox);
 			toolbar = DesktopService.CreateMainToolbar (this);
 			DesktopService.SetMainWindowDecorations (this);
 			DesktopService.AttachMainToolbar (fullViewVBox, toolbar);
@@ -849,7 +850,6 @@ namespace MonoDevelop.Ide.Gui
 				OnActiveWindowChanged (null, null);
 			};
 
-			Add (fullViewVBox);
 			fullViewVBox.ShowAll ();
 			bottomBar = new MonoDevelopStatusBar ();
 			fullViewVBox.PackEnd (bottomBar, false, true, 0);
