@@ -186,6 +186,9 @@
     <EmbeddedResource Include="icons\device~dark%402x.png">
       <LogicalName>device~dark@2x.png</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="icons\project.pdf">
+      <LogicalName>project.pdf</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="icons\project.png">
       <LogicalName>project.png</LogicalName>
     </EmbeddedResource>
