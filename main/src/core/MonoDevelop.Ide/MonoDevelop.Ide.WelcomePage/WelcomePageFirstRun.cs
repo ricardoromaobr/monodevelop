@@ -31,7 +31,6 @@ using MonoDevelop.Ide.Gui;
 using MonoDevelop.Components;
 using System.Collections.Generic;
 using Xwt.Motion;
-using Mono.TextEditor;
 
 namespace MonoDevelop.Ide.WelcomePage
 {
@@ -46,7 +45,6 @@ namespace MonoDevelop.Ide.WelcomePage
 		static readonly Gdk.Point IconPosition = new Gdk.Point (WidgetSize.Width - 220 - Padding, WidgetSize.Height / 2);
 		static readonly double PreviewSize = 350;
 
-		Xwt.Drawing.Image starburst;
 		Xwt.Drawing.Image brandedIcon;
 
 		MouseTracker tracker;
@@ -81,7 +79,6 @@ namespace MonoDevelop.Ide.WelcomePage
 		{
 			VisibleWindow = false;
 			SetSizeRequest (WidgetSize.Width, WidgetSize.Height);
-			starburst = Xwt.Drawing.Image.FromResource ("starburst.png");
 
 			string iconFile = BrandingService.GetString ("ApplicationIcon");
 			if (iconFile != null) {
@@ -143,34 +140,14 @@ namespace MonoDevelop.Ide.WelcomePage
 				context.FillPreserve ();
 			}
 
-			context.Save ();
-			context.Translate (IconPosition.X, IconPosition.Y);
-			context.Scale (0.75, 0.75);
-			context.DrawImage (this, starburst, -starburst.Width / 2, -starburst.Height / 2);
-			context.Restore ();
-
 			context.LineWidth = 1;
 			context.SetSourceRGB (.29, .47, .67);
 			context.Stroke ();
-
 		}
 
 		void RenderPreview (Cairo.Context context, Gdk.Point position, double opacity)
 		{
 			if (brandedIcon != null) {
-				/*				if (previewSurface == null) {
-					previewSurface = new SurfaceWrapper (context, brandedIcon);
-				}
-				double scale = PreviewSize / previewSurface.Width;
-
-				context.Save ();
-				context.Translate (position.X, position.Y);
-				context.Scale (scale * IconScale, scale * IconScale);
-				context.SetSourceSurface (previewSurface.Surface, -previewSurface.Width / 2, -previewSurface.Height / 2);
-				context.PaintWithAlpha (opacity);
-				context.Restore ();
-				*/
-
 				double scale = PreviewSize / brandedIcon.Width;
 				context.Save ();
 				context.Translate (position.X, position.Y);
@@ -268,10 +245,10 @@ namespace MonoDevelop.Ide.WelcomePage
 		SurfaceWrapper titleSurface;
 		SurfaceWrapper textSurface;
 		SurfaceWrapper buttonSurface;
-		SurfaceWrapper previewSurface;
 
 		protected override void OnDestroyed ()
 		{
+			this.AbortAnimation ("FadeOut");
 			if (backgroundSurface != null)
 				backgroundSurface.Dispose ();
 			if (titleSurface != null)
@@ -280,8 +257,6 @@ namespace MonoDevelop.Ide.WelcomePage
 				textSurface.Dispose ();
 			if (buttonSurface != null)
 				buttonSurface.Dispose ();
-			if (previewSurface != null)
-				previewSurface.Dispose ();
 			base.OnDestroyed ();
 		}
 
@@ -289,10 +264,11 @@ namespace MonoDevelop.Ide.WelcomePage
 		Gdk.Size TitleSize {
 			get {
 				if (titleSize == null) {
-					var layout = TitleLayout (PangoContext);
-					int w, h;
-					layout.GetPixelSize (out w, out h);
-					titleSize = new Gdk.Size (w, h);
+					using (var layout = TitleLayout (PangoContext)) {
+						int w, h;
+						layout.GetPixelSize (out w, out h);
+						titleSize = new Gdk.Size (w, h);
+					}
 				}
 				return titleSize.Value;
 			}
@@ -302,10 +278,11 @@ namespace MonoDevelop.Ide.WelcomePage
 		Gdk.Size TextSize {
 			get {
 				if (textSize == null) {
-					var layout = TextLayout (PangoContext);
-					int w, h;
-					layout.GetPixelSize (out w, out h);
-					textSize = new Gdk.Size (w, h);
+					using (var layout = TextLayout (PangoContext)) {
+						int w, h;
+						layout.GetPixelSize (out w, out h);
+						textSize = new Gdk.Size (w, h);
+					}
 				}
 				return textSize.Value;
 			}

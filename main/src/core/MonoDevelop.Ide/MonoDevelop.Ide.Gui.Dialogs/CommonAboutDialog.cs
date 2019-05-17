@@ -44,16 +44,21 @@ using Pango;
 using System.IO;
 using Mono.Addins;
 using System.Collections.Generic;
+using MonoDevelop.Components;
 
 namespace MonoDevelop.Ide.Gui.Dialogs
 {
-	internal class CommonAboutDialog : Dialog
+	public static class AboutDialogImage
+	{
+		public static string Name =  "AboutImage.png";
+	}
+
+	internal class CommonAboutDialog : IdeDialog
 	{
 		public CommonAboutDialog ()
 		{
 			Name = "wizard_dialog";
 			Title = string.Format (GettextCatalog.GetString ("About {0}"), BrandingService.ApplicationName);
-			TransientFor = IdeApp.Workbench.RootWindow;
 			AllowGrow = false;
 			HasSeparator = false;
 			BorderWidth = 0;
@@ -85,10 +90,7 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 					notebook.Page = 0;
 				}
 			};
-
-			AddButton (Gtk.Stock.Close, (int)ResponseType.Close);
-
-			ShowAll ();
+			backButton.HasDefault = backButton.CanDefault = true;
 		}
 
 		static void CopyBufferToClipboard ()
@@ -113,21 +115,24 @@ namespace MonoDevelop.Ide.Gui.Dialogs
 					ChangeColor (cw);
 			}
 		}
-		
+
 		static CommonAboutDialog instance;
-		
+
 		public static void ShowAboutDialog ()
 		{
 			if (Platform.IsMac) {
 				if (instance == null) {
+					var parent = IdeServices.DesktopService.GetFocusedTopLevelWindow ();
 					instance = new CommonAboutDialog ();
-					MessageService.PlaceDialog (instance, IdeApp.Workbench.RootWindow);
+					instance.ShowAll ();
+					MessageService.PlaceDialog (instance, parent);
 					instance.Response += delegate {
 						instance.Destroy ();
 						instance.Dispose ();
 						instance = null;
 					};
 				}
+
 				instance.Present ();
 				return;
 			}

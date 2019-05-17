@@ -30,67 +30,66 @@ using System.Windows;
 using System.Windows.Interop;
 using Gtk;
 using Gdk;
+using System.Threading;
+using System.Runtime.InteropServices;
 
 namespace MonoDevelop.Components.Windows
 {
 	public class GtkWPFWidget : Widget
 	{
-		bool fromGtk;
-		internal System.Windows.Window wpfWindow {
+		internal System.Windows.Forms.Integration.ElementHost wpfWidgetHost {
 			get;
 			private set;
 		}
 
 		public GtkWPFWidget (System.Windows.Controls.Control wpfControl)
 		{
-			wpfWindow = new System.Windows.Window {
-				Content = wpfControl,
-				AllowsTransparency = true,
-				WindowStyle = WindowStyle.None,
-				Background = System.Windows.Media.Brushes.Transparent,
+			wpfWidgetHost = new System.Windows.Forms.Integration.ElementHost
+			{
+				BackColor = System.Drawing.Color.SeaGreen,
+				Child = wpfControl,
 			};
-			wpfWindow.PreviewKeyDown += (sender, e) => {
+
+			wpfControl.PreviewKeyDown += (sender, e) => {
 				// TODO: Some commands check for toplevels, and this window is not a toplevel.
+				if (e.Key == System.Windows.Input.Key.Escape)
+				{
+					System.Windows.Input.Keyboard.ClearFocus();
+					MonoDevelop.Ide.IdeApp.Workbench.Present();
+					return;
+				}
+
 				var key = e.Key == System.Windows.Input.Key.System ? e.SystemKey : e.Key;
 				e.Handled = Ide.IdeApp.CommandService.ProcessKeyEvent (GtkWin32Interop.ConvertKeyEvent (e.KeyboardDevice.Modifiers, key));
 			};
-
-			wpfWindow.Closed += (sender, e) => {
-				if (fromGtk)
-					return;
-
-				Ide.IdeApp.Exit ();
-			};
-			wpfWindow.ShowInTaskbar = false;
 			WidgetFlags |= WidgetFlags.NoWindow;
 		}
 
-		void RepositionWpfWindow ()
+        protected virtual void RepositionWpfWindow ()
+        {
+            int scale = (int)MonoDevelop.Components.GtkWorkarounds.GetScaleFactor(this);
+            RepositionWpfWindow (scale, scale);
+        }
+
+		protected void RepositionWpfWindow (double hscale, double vscale)
 		{
 			int x, y;
-
-			var gtkWnd = Toplevel as Gtk.Window;
-			int offset = 0;
-			if (gtkWnd.Decorated)
-				offset = System.Windows.Forms.SystemInformation.CaptionHeight;
-
-			int root_x, root_y;
-			gtkWnd.GetPosition (out root_x, out root_y);
-			if (TranslateCoordinates (Toplevel, root_x, root_y + offset, out x, out y)) {
-				wpfWindow.Left = x;
-				wpfWindow.Top = y;
+			if (TranslateCoordinates (Toplevel, 0, 0, out x, out y)) {
+				wpfWidgetHost.Left = (int)(x * hscale);
+				wpfWidgetHost.Top = (int)(y * vscale);
 			} else {
-				wpfWindow.Left = Allocation.Left;
-				wpfWindow.Top = Allocation.Top;
+				wpfWidgetHost.Left = Allocation.Left;
+				wpfWidgetHost.Top = Allocation.Top;
 			}
-			wpfWindow.Width = Allocation.Width;
-			wpfWindow.Height = Allocation.Height;
+			wpfWidgetHost.Width = (int)((Allocation.Width + 1) * hscale);
+			wpfWidgetHost.Height = (int)((Allocation.Height + 1) * vscale);
 		}
 
 		protected override void OnRealized ()
 		{
 			base.OnRealized ();
 
+			// Initial size setting.
 			RepositionWpfWindow ();
 		}
 
@@ -98,43 +97,36 @@ namespace MonoDevelop.Components.Windows
 		{
 			base.OnSizeAllocated (allocation);
 
+			// Needed for window full screening.
 			RepositionWpfWindow ();
+		}
+
+		void OnWindowConfigured(object sender, ConfigureEventArgs args)
+		{
+			RepositionWpfWindow();
 		}
 
 		protected override void OnDestroyed ()
 		{
 			base.OnDestroyed ();
 
-			fromGtk = true;
-			wpfWindow.Close ();
+			wpfWidgetHost.Dispose();
 		}
 
 		protected override void OnShown ()
 		{
 			base.OnShown ();
 
-			wpfWindow.Show ();
-			AttachWindow ();
-		}
-
-		void AttachWindow ()
-		{
-			IntPtr gtkWindowPtr = GtkWin32Interop.HWndGet (Ide.IdeApp.Workbench.RootWindow.GdkWindow);
-			IntPtr wpfWindowPtr = new WindowInteropHelper (wpfWindow).Handle;
-			GtkWin32Interop.SetWindowLongPtr (wpfWindowPtr, (int)GtkWin32Interop.GWLParameter.GWL_HWNDPARENT, gtkWindowPtr);
+			IntPtr gtkWindowPtr = GtkWin32Interop.HWndGet(Ide.IdeApp.Workbench.RootWindow.GdkWindow);
+			IntPtr wpfWindowPtr = wpfWidgetHost.Handle;
+			GtkWin32Interop.SetWindowLongPtr(wpfWindowPtr, (int)GtkWin32Interop.GWLParameter.GWL_HWNDPARENT, gtkWindowPtr);
 			Ide.IdeApp.Workbench.RootWindow.ConfigureEvent += OnWindowConfigured;
-		}
-
-		void OnWindowConfigured (object sender, ConfigureEventArgs args)
-		{
-			RepositionWpfWindow ();
 		}
 
 		protected override void OnHidden ()
 		{
 			base.OnHidden ();
-
-			wpfWindow.Hide ();
+			
 			Ide.IdeApp.Workbench.RootWindow.ConfigureEvent -= OnWindowConfigured;
 		}
 	}

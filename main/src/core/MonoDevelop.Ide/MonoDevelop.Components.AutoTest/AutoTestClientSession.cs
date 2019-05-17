@@ -60,7 +60,7 @@ namespace MonoDevelop.Components.AutoTest
 			}
 		}
 				
-		public void StartApplication (string file = null, string args = null, IDictionary<string, string> environment = null)
+		public int StartApplication (string file = null, string args = null, IDictionary<string, string> environment = null)
 		{
 			if (file == null) {
 				var binDir = Path.GetDirectoryName (typeof(AutoTestClientSession).Assembly.Location);
@@ -98,6 +98,8 @@ namespace MonoDevelop.Components.AutoTest
 				} catch { }
 				throw new Exception ("Could not connect to application");
 			}
+
+			return process.Id;
 		}
 
 		public void AttachApplication ()
@@ -120,6 +122,8 @@ namespace MonoDevelop.Components.AutoTest
 			return null;
 		}
 
+		public void DisconnectQueries () => session.DisconnectQueries ();
+
 		public void Stop ()
 		{
 			if (service != null)
@@ -127,7 +131,7 @@ namespace MonoDevelop.Components.AutoTest
 			else
 				try {
 					process.Kill ();
-				} catch (InvalidOperationException invalidExp) {
+				} catch (InvalidOperationException) {
 					Console.WriteLine ("Process has already exited");
 				}
 		}
@@ -191,7 +195,8 @@ namespace MonoDevelop.Components.AutoTest
 
 		public T GetGlobalValue<T> (string name)
 		{
-			return (T) session.GetGlobalValue (name);
+			var val = (T)session.GetGlobalValue(name);
+			return val;
 		}
 
 		public void SetGlobalValue (string name, object value)
@@ -211,6 +216,11 @@ namespace MonoDevelop.Components.AutoTest
 		public int ErrorCount (TaskSeverity severity)
 		{
 			return session.ErrorCount (severity);
+		}
+
+		public List<TaskListEntryDTO> GetErrors (TaskSeverity severity)
+		{
+			return session.GetErrors (severity);
 		}
 
 		public void WaitForEvent (string name)
@@ -299,6 +309,16 @@ namespace MonoDevelop.Components.AutoTest
 			return false;
 		}
 
+		public bool ClickElement (Func<AppQuery, AppQuery> query, double x, double y, bool wait = true)
+		{
+			AppResult [] results = Query (query);
+			if (results.Length > 0) {
+				return session.Click (results [0], x, y, wait);
+			}
+
+			return false;
+		}
+
 		public bool EnterText (Func<AppQuery, AppQuery> query, string text)
 		{
 			AppResult[] results = Query (query);
@@ -363,6 +383,14 @@ namespace MonoDevelop.Components.AutoTest
 			}
 		}
 
+		public void SetProperty (Func<AppQuery, AppQuery> query, string propertyName, object value)
+		{
+			AppResult[] results = Query (query);
+			foreach (var result in results) {
+				session.SetProperty (result, propertyName, value);
+			}
+		}
+
 		public bool SetActiveConfiguration (Func<AppQuery, AppQuery> query, string configuration)
 		{
 			AppResult[] results = Query (query);
@@ -388,6 +416,23 @@ namespace MonoDevelop.Components.AutoTest
 			AutoTestSession.TimerCounterContext context = session.CreateNewTimerContext (counterName);
 			action ();
 			session.WaitForTimerContext (context, timeout);
+		}
+
+		public TimeSpan GetTimerDuration (string timerName)
+		{
+			return session.CreateNewTimerContext (timerName).TotalTime;
+		}
+
+		public void WaitForCounterChange (string counterName, int timeout = 20000)
+		{
+			AutoTestSession.CounterContext context = session.CreateNewCounterContext (counterName);
+
+			session.WaitForCounterToChange (context, timeout);
+		}
+
+		public T GetCounterMetadataValue<T> (string counterName, string propertyName)
+		{
+			return session.GetCounterMetadataValue<T> (counterName, propertyName);
 		}
 
 		public XmlDocument ResultsAsXml (AppResult[] results)

@@ -32,6 +32,7 @@ using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Projects;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace MonoDevelop.Debugger
 {
@@ -39,68 +40,57 @@ namespace MonoDevelop.Debugger
 	{
 		public static bool CanDebug (this ProjectOperations opers, IBuildTarget entry)
 		{
-			ExecutionContext context = new ExecutionContext (DebuggingService.GetExecutionHandler (), IdeApp.Workbench.ProgressMonitors, IdeApp.Workspace.ActiveExecutionTarget);
+			ExecutionContext context = new ExecutionContext (DebuggingService.GetExecutionHandler (), IdeApp.Workbench.ProgressMonitors.ConsoleFactory, IdeApp.Workspace.ActiveExecutionTarget);
 			return opers.CanExecute (entry, context);
 		}
 
-		public static IAsyncOperation Debug (this ProjectOperations opers, IBuildTarget entry)
+		public static AsyncOperation Debug (this ProjectOperations opers, IBuildTarget entry, bool buildBeforeExecuting = true)
 		{
-			if (opers.CurrentRunOperation != null && !opers.CurrentRunOperation.IsCompleted)
-				return opers.CurrentRunOperation;
+			ExecutionContext context = new ExecutionContext (DebuggingService.GetExecutionHandler (), IdeApp.Workbench.ProgressMonitors.ConsoleFactory, IdeApp.Workspace.ActiveExecutionTarget);
 
-			ExecutionContext context = new ExecutionContext (DebuggingService.GetExecutionHandler (), IdeApp.Workbench.ProgressMonitors, IdeApp.Workspace.ActiveExecutionTarget);
-
-			IAsyncOperation op = opers.Execute (entry, context);
-			return op;
+			return opers.Execute (entry, context, buildBeforeExecuting);
 		}
 
 		public static bool CanDebugFile (this ProjectOperations opers, string file)
 		{
-			var context = new ExecutionContext (DebuggingService.GetExecutionHandler (), IdeApp.Workbench.ProgressMonitors, IdeApp.Workspace.ActiveExecutionTarget);
+			var context = new ExecutionContext (DebuggingService.GetExecutionHandler (), IdeApp.Workbench.ProgressMonitors.ConsoleFactory, IdeApp.Workspace.ActiveExecutionTarget);
 			return opers.CanExecuteFile (file, context);
 		}
 
-		public static IAsyncOperation DebugFile (this ProjectOperations opers, string file)
+		public static AsyncOperation DebugFile (this ProjectOperations opers, string file)
 		{
-			var context = new ExecutionContext (DebuggingService.GetExecutionHandler (), IdeApp.Workbench.ProgressMonitors, IdeApp.Workspace.ActiveExecutionTarget);
+			var context = new ExecutionContext (DebuggingService.GetExecutionHandler (), IdeApp.Workbench.ProgressMonitors.ConsoleFactory, IdeApp.Workspace.ActiveExecutionTarget);
 			return opers.ExecuteFile (file, context);
 		}
 
-		public static IAsyncOperation DebugApplication (this ProjectOperations opers, string executableFile, string args, string workingDir, IDictionary<string,string> envVars)
+		public static AsyncOperation DebugApplication (this ProjectOperations opers, string executableFile, string args, string workingDir, IDictionary<string,string> envVars)
 		{
-			if (opers.CurrentRunOperation != null && !opers.CurrentRunOperation.IsCompleted)
-				return opers.CurrentRunOperation;
+			if (!IdeApp.Workbench.RootWindow.Visible) {
+				IdeApp.Workbench.RootWindow.Show ();
+			}
 
-			var monitor = IdeApp.Workbench.ProgressMonitors.GetRunProgressMonitor ();
+			var monitor = IdeApp.Workbench.ProgressMonitors.GetRunProgressMonitor (System.IO.Path.GetFileName (executableFile));
 
-			var oper = DebuggingService.Run (executableFile, args, workingDir, envVars, (IConsole) monitor);
-			oper.Completed += delegate {
+			var oper = DebuggingService.Run (executableFile, args, workingDir, envVars, monitor.Console);
+			opers.AddRunOperation (oper);
+
+			oper.Task.ContinueWith (t => {
 				monitor.Dispose ();
-			};
+			});
 
-			opers.CurrentRunOperation = monitor.AsyncOperation;
-			return opers.CurrentRunOperation;
+			return oper;
 		}
 
-		public static IAsyncOperation AttachToProcess (this ProjectOperations opers, DebuggerEngine debugger, ProcessInfo proc)
+		public static AsyncOperation AttachToProcess (this ProjectOperations opers, DebuggerEngine debugger, ProcessInfo proc)
 		{
-			if (opers.CurrentRunOperation != null && !opers.CurrentRunOperation.IsCompleted)
-				return opers.CurrentRunOperation;
+			if (!IdeApp.Workbench.RootWindow.Visible) {
+				IdeApp.Workbench.RootWindow.Show ();
+			}
 
 			var oper = DebuggingService.AttachToProcess (debugger, proc);
 
-			opers.CurrentRunOperation = oper;
+			opers.AddRunOperation (oper);
 			return opers.CurrentRunOperation;
-		}
-
-		public static IAsyncOperation Debug (this Document doc)
-		{
-			return IdeApp.ProjectOperations.DebugFile (doc.FileName);
-		}
-
-		public static bool CanDebug (this Document doc)
-		{
-			return doc.FileName != FilePath.Null && IdeApp.ProjectOperations.CanDebugFile (doc.FileName);
 		}
 	}
 }

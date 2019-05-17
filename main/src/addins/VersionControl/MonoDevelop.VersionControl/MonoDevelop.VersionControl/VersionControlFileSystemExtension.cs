@@ -15,7 +15,7 @@ namespace MonoDevelop.VersionControl
 		public override bool CanHandlePath (FilePath path, bool isDirectory)
 		{
 			// FIXME: don't load this extension if the ide is not loaded.
-			if (IdeApp.ProjectOperations == null || !IdeApp.Workspace.IsOpen)
+			if (!IdeApp.IsInitialized || !IdeApp.Workspace.IsOpen)
 				return false;
 
 			return GetRepository (path) != null;
@@ -25,7 +25,7 @@ namespace MonoDevelop.VersionControl
 		{
 			path = path.FullPath;
 			
-			Project p = IdeApp.Workspace.GetProjectContainingFile (path);
+			Project p = IdeApp.Workspace.GetProjectsContainingFile (path).FirstOrDefault ();
 			if (p != null)
 				return VersionControlService.GetRepository (p);
 			
@@ -52,7 +52,7 @@ namespace MonoDevelop.VersionControl
 		
 		public override void MoveFile (FilePath source, FilePath dest)
 		{
-			IProgressMonitor monitor = new NullProgressMonitor ();
+			ProgressMonitor monitor = new ProgressMonitor ();
 
 			Repository srcRepo = GetRepository (source);
 			Repository dstRepo = GetRepository (dest);
@@ -78,7 +78,7 @@ namespace MonoDevelop.VersionControl
 		public override void DeleteFile (FilePath file)
 		{
 			Repository repo = GetRepository (file);
-			repo.DeleteFile (file, true, new NullProgressMonitor (), false);
+			repo.DeleteFile (file, true, new ProgressMonitor (), false);
 		}
 		
 		public override void CreateDirectory (FilePath path)
@@ -86,12 +86,12 @@ namespace MonoDevelop.VersionControl
 			Repository repo = GetRepository (path);
 			repo.ClearCachedVersionInfo (path);
 			System.IO.Directory.CreateDirectory (path);
-			repo.Add (path, false, new NullProgressMonitor ());
+			repo.Add (path, false, new ProgressMonitor ());
 		}
 		
 		public override void MoveDirectory (FilePath sourcePath, FilePath destPath)
 		{
-			IProgressMonitor monitor = new NullProgressMonitor ();
+			ProgressMonitor monitor = new ProgressMonitor ();
 			
 			Repository srcRepo = GetRepository (sourcePath);
 			Repository dstRepo = GetRepository (destPath);
@@ -107,13 +107,13 @@ namespace MonoDevelop.VersionControl
 		public override void DeleteDirectory (FilePath path)
 		{
 			Repository repo = GetRepository (path);
-			repo.DeleteDirectory (path, true, new NullProgressMonitor (), false);
+			repo.DeleteDirectory (path, true, new ProgressMonitor (), false);
 		}
 
-		public override void RequestFileEdit (IEnumerable<FilePath> files)
+		public override void RequestFileEdit (FilePath file)
 		{
-			Repository repo = GetRepository (FilePath.GetCommonRootPath (files));
-			repo.RequestFileWritePermission (files.ToArray ());
+			Repository repo = GetRepository (file.FullPath);
+			repo.RequestFileWritePermission (file);
 		}
 		
 		public override void NotifyFilesChanged (IEnumerable<FilePath> files)
@@ -121,7 +121,7 @@ namespace MonoDevelop.VersionControl
 			FileUpdateEventArgs args = new FileUpdateEventArgs ();
 			foreach (var file in files) {
 				var rep = GetRepository (file);
-				if (rep != null) {
+				if (rep != null && !rep.IsDisposed) {
 					rep.ClearCachedVersionInfo (file);
 					args.Add (new FileUpdateEventInfo (rep, file, false));
 				}

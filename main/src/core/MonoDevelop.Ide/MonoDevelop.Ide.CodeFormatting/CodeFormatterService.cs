@@ -1,4 +1,4 @@
-// 
+﻿// 
 // CodeFormatterService.cs
 //  
 // Author:
@@ -29,9 +29,12 @@ using System.Linq;
 using System.Collections.Generic;
 using Mono.Addins;
 using MonoDevelop.Projects.Policies;
+using MonoDevelop.Ide.Editor;
+using MonoDevelop.Core.Text;
 
 namespace MonoDevelop.Ide.CodeFormatting
 {
+	[Obsolete ("Use the Microsoft.VisualStudio.Text APIs")]
 	public sealed class CodeFormatterService
 	{
 		static List<CodeFormatterExtensionNode> nodes = new List<CodeFormatterExtensionNode> ();
@@ -55,18 +58,35 @@ namespace MonoDevelop.Ide.CodeFormatting
 		
 		public static CodeFormatter GetFormatter (string mimeType)
 		{
-			//find the most specific formatter that can handle the document
-			var chain = DesktopService.GetMimeTypeInheritanceChain (mimeType).ToList ();
+			//find the most specific formatter that can handle the document			var chain = IdeServices.DesktopService.GetMimeTypeInheritanceChain (mimeType);
 			foreach (var mt in chain) {
 				var node = nodes.FirstOrDefault (f => f.MimeType == mt);
 				if (node != null)
-					return new CodeFormatter (chain, node.GetFormatter ());
+					return new CodeFormatter (mimeType, node.GetFormatter ());
 			}
 			
-			if (DesktopService.GetMimeTypeIsText (mimeType))
-				return new CodeFormatter (chain, new DefaultCodeFormatter ());
+			if (IdeServices.DesktopService.GetMimeTypeIsText (mimeType))
+				return new CodeFormatter (mimeType, new DefaultCodeFormatter ());
 			
 			return null;
+		}
+
+		public static void Format (TextEditor editor, DocumentContext ctx, ISegment segment)
+		{
+			if (editor == null)
+				throw new ArgumentNullException ("editor");
+			if (ctx == null)
+				throw new ArgumentNullException ("ctx");
+			if (segment == null)
+				throw new ArgumentNullException ("segment");
+			var fmt = GetFormatter (editor.MimeType);
+			if (fmt == null)
+				return;
+			if (fmt.SupportsOnTheFlyFormatting) {
+				fmt.OnTheFlyFormat (editor, ctx, segment);
+				return;
+			}
+			editor.Text = fmt.FormatText (ctx.HasProject ? ctx.Project.Policies : null, editor.Text, segment);
 		}
 	}
 }

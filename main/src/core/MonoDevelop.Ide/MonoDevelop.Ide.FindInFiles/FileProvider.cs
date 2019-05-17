@@ -31,10 +31,56 @@ using MonoDevelop.Ide.Gui;
 using System.Text;
 using MonoDevelop.Core;
 using System;
-using Mono.TextEditor.Utils;
+using MonoDevelop.Core.Text;
+using System.Threading.Tasks;
+using MonoDevelop.Ide.Editor;
+using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text;
 
 namespace MonoDevelop.Ide.FindInFiles
 {
+	class OpenFileProvider : FileProvider
+	{
+		readonly ITextBuffer textBuffer;
+		ITextEdit textEdit;
+
+		public OpenFileProvider (ITextBuffer textBuffer, Project project, string fileName) : this(textBuffer, project, fileName, - 1, -1)
+		{
+		}
+
+		public OpenFileProvider (ITextBuffer textBuffer, Project project, string fileName, int selectionStartPostion, int selectionEndPosition) : base (fileName, project, selectionStartPostion, selectionEndPosition)
+		{
+			this.textBuffer = textBuffer;
+		}
+
+		public override TextReader ReadString (bool readBinaryFiles)
+		{
+			return new Microsoft.VisualStudio.Platform.NewTextSnapshotToTextReader (textBuffer.CurrentSnapshot);
+		}
+
+		public override void BeginReplace (string content, Encoding encoding)
+		{
+			Gtk.Application.Invoke ((o, args) => {
+				textEdit = textBuffer.CreateEdit ();
+			});
+		}
+
+		public override void Replace (int offset, int offsetWithoutDelta, int length, string replacement)
+		{
+			Gtk.Application.Invoke ((o, args) => {
+				textEdit.Replace (offsetWithoutDelta, length, replacement);
+			});
+		}
+
+		public override void EndReplace ()
+		{
+			Gtk.Application.Invoke ((o, args) => {
+				textEdit.Apply ();
+				textEdit = null;
+			});
+		}
+	}
+
 	public class FileProvider
 	{
 		public string FileName {
@@ -59,6 +105,8 @@ namespace MonoDevelop.Ide.FindInFiles
 			set;
 		}
 
+		public Encoding CurrentEncoding { get; private set; }
+
 		public FileProvider(string fileName) : this(fileName, null)
 		{
 		}
@@ -75,97 +123,94 @@ namespace MonoDevelop.Ide.FindInFiles
 			SelectionEndPosition = selectionEndPosition;
 		}
 		
-		public string ReadString ()
+		public TextReader ReadString ()
 		{
 			return ReadString (false);
 		}
 
-		WeakReference cachedText;
-
-		public string ReadString (bool readBinaryFiles)
+		public virtual TextReader ReadString (bool readBinaryFiles)
 		{
-			string result = cachedText != null ? cachedText.Target as string : null;
-			if (result != null) {
-				return result;
-			}
-
 			if (buffer != null) {
-				result = buffer.ToString ();
+				return new StringReader (buffer.ToString ());
 			} else {
 				var doc = SearchDocument ();
-				if (doc != null && doc.Editor != null) {
-					result = doc.Editor.Text;
+				var tb = doc?.GetContent<ITextBuffer> ();
+				if (tb != null) {
+					return new Microsoft.VisualStudio.Platform.NewTextSnapshotToTextReader (tb.CurrentSnapshot);
 				} else {
-					try {
-						if (!File.Exists (FileName))
-							return null;
-						var content = File.ReadAllBytes (FileName);
-						if (!readBinaryFiles && TextFileUtility.IsBinary (content))
-							return null;
-						result = TextFileUtility.GetText (content, out encoding, out hadBom);
-					} catch (Exception e) {
-						LoggingService.LogError ("Error while opening " + FileName, e);
-						return null;
-					}
+					return GetReaderForFileName (readBinaryFiles);
 				}
 			}
-			cachedText = new WeakReference (result);
-			return result;
 		}
-		
+
+		internal TextReader GetReaderForFileName (bool readBinaryFiles = false)
+		{
+			try {
+				if (!File.Exists (FileName))
+					return null;
+				if (!readBinaryFiles && TextFileUtility.IsBinary (FileName))
+					return null;
+				var sr =  TextFileUtility.OpenStream (FileName);
+				CurrentEncoding = sr.CurrentEncoding;
+				return sr;
+			} catch (Exception e) {
+				LoggingService.LogError ("Error while opening " + FileName, e);
+				return null;
+			}
+		}
+
 		Document SearchDocument ()
 		{
-			return IdeApp.Workbench.Documents.FirstOrDefault(d => !string.IsNullOrEmpty (d.FileName) &&  Path.GetFullPath (d.FileName) == Path.GetFullPath (FileName));
+			string fullPath = Path.GetFullPath (FileName);
+			return IdeServices.DocumentManager.Documents.FirstOrDefault (d => !string.IsNullOrEmpty (d.FileName) && Path.GetFullPath (d.FileName) == fullPath);
 		}
 
-		Document document;
+		ITextBuffer textBuffer;
 		StringBuilder buffer = null;
 		bool somethingReplaced;
-		IDisposable undoGroup;
-		bool hadBom;
+		ITextEdit textEdit;
 		Encoding encoding;
 
-		public void BeginReplace (string content)
+		public virtual void BeginReplace (string content, Encoding encoding)
 		{
 			somethingReplaced = false;
 			buffer = new StringBuilder (content);
-			document = SearchDocument ();
-			if (document != null) {
-				Gtk.Application.Invoke (delegate {
-					undoGroup = document.Editor.OpenUndoGroup ();
+			textBuffer = SearchDocument ()?.GetContent<ITextBuffer> ();
+			this.encoding = encoding; 
+			if (textBuffer != null) {
+				Gtk.Application.Invoke ((o, args) => {
+					textEdit = textBuffer.CreateEdit ();
 				});
 				return;
 			}
 		}
 		
-		public void Replace (int offset, int length, string replacement)
+		public virtual void Replace (int offset, int offsetWithoutDelta, int length, string replacement)
 		{
 			somethingReplaced = true;
 			buffer.Remove (offset, length);
 			buffer.Insert (offset, replacement);
-			if (document != null) {
-				Gtk.Application.Invoke (delegate {
-					document.Editor.Replace (offset, length, replacement);
+			if (textBuffer != null) {
+				Gtk.Application.Invoke ((o, args) => {
+					textEdit.Replace (offsetWithoutDelta, length, replacement);
 				});
 				return;
 			}
 		}
 		
-		public void EndReplace ()
+		public virtual void EndReplace ()
 		{
-			if (document != null) {
-				Gtk.Application.Invoke (delegate { 
-					if (undoGroup != null) {
-						undoGroup.Dispose ();
-						undoGroup = null;
-					}
-					document.Editor.Document.CommitUpdateAll (); });
+			if (textBuffer != null) {
+				Gtk.Application.Invoke ((o, args) => {
+					textEdit.Apply ();
+					textEdit = null;
+				});
 				return;
 			}
 			if (buffer != null && somethingReplaced) {
-				object attributes = DesktopService.GetFileAttributes (FileName);
-				TextFileUtility.WriteText (FileName, buffer.ToString (), encoding, hadBom);
-				DesktopService.SetFileAttributes (FileName, attributes);
+				object attributes = IdeServices.DesktopService.GetFileAttributes (FileName);
+				TextFileUtility.WriteText (FileName, buffer.ToString (), encoding ?? Encoding.UTF8);
+				IdeServices.DesktopService.SetFileAttributes (FileName, attributes);
 			}
 			buffer = null;
 		}

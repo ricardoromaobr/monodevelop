@@ -1,4 +1,4 @@
-// 
+﻿// 
 // AutoTestServer.cs
 //  
 // Author:
@@ -40,6 +40,7 @@ using MonoDevelop.Components.Commands;
 using MonoDevelop.Core;
 
 using System.Xml;
+using System.Runtime.Remoting;
 
 namespace MonoDevelop.Components.AutoTest
 {
@@ -58,6 +59,8 @@ namespace MonoDevelop.Components.AutoTest
 			set { SessionDebug.DebugObject = value; }
 		}
 
+		readonly List<AppQuery> queries = new List<AppQuery> ();
+
 		public AutoTestSession ()
 		{
 		}
@@ -67,9 +70,44 @@ namespace MonoDevelop.Components.AutoTest
 			return null;
 		}
 
+		~AutoTestSession()
+		{
+			Dispose (false);
+		}
+
+		public void Dispose()
+		{
+			GC.SuppressFinalize (this);
+			Dispose (true);
+		}
+
+		public void DisconnectQueries()
+		{
+			lock (queries) {
+				foreach (var query in queries) {
+					query.Dispose ();
+				}
+				queries.Clear ();
+			}
+		}
+
+		bool disposed;
+		protected virtual void Dispose(bool disposing)
+		{
+			if (disposed)
+				return;
+
+			disposed = true;
+			RemotingServices.Disconnect (this);
+
+			DisconnectQueries ();
+		}
+
 		[Serializable]
 		public struct MemoryStats {
 			public long PrivateMemory;
+			public long VirtualMemory;
+			public long WorkingSet;
 			public long PeakVirtualMemory;
 			public long PagedSystemMemory;
 			public long PagedMemory;
@@ -82,6 +120,8 @@ namespace MonoDevelop.Components.AutoTest
 			using (Process proc = Process.GetCurrentProcess ()) {
 				stats = new MemoryStats {
 					PrivateMemory = proc.PrivateMemorySize64,
+					VirtualMemory = proc.VirtualMemorySize64,
+					WorkingSet = proc.WorkingSet64,
 					PeakVirtualMemory = proc.PeakVirtualMemorySize64,
 					PagedSystemMemory = proc.PagedSystemMemorySize64,
 					PagedMemory = proc.PagedMemorySize64,
@@ -98,7 +138,7 @@ namespace MonoDevelop.Components.AutoTest
 
 		public void ExecuteCommand (object cmd, object dataItem = null, CommandSource source = CommandSource.Unknown)
 		{
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o, args) => {
 				AutoTestService.CommandManager.DispatchCommand (cmd, dataItem, null, source);
 			});
 		}
@@ -108,13 +148,13 @@ namespace MonoDevelop.Components.AutoTest
 			object res = null;
 			Exception error = null;
 
-			if (DispatchService.IsGuiThread) {
+			if (Runtime.IsMainThread) {
 				res = del ();
 				return safe ? SafeObject (res) : res;
 			}
 
 			syncEvent.Reset ();
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o, args) => {
 				try {
 					res = del ();
 				} catch (Exception ex) {
@@ -147,11 +187,10 @@ namespace MonoDevelop.Components.AutoTest
 		public void ExitApp ()
 		{
 			Sync (delegate {
-				try {
-					IdeApp.Exit ();
-				} catch (Exception e) {
-					Console.WriteLine (e);
-				}
+				IdeApp.Exit ().ContinueWith ((arg) => {
+					if (arg.IsFaulted)
+						Console.WriteLine (arg.Exception);
+				});
 				return true;
 			});
 		}
@@ -182,7 +221,7 @@ namespace MonoDevelop.Components.AutoTest
 		public void TakeScreenshot (string screenshotPath)
 		{
 			#if MAC
-			DispatchService.GuiDispatch (delegate {
+			Runtime.RunInMainThread (delegate {
 				try {
 					IntPtr handle = CGDisplayCreateImage (MainDisplayID ());
 					CoreGraphics.CGImage screenshot = ObjCRuntime.Runtime.GetINativeObject <CoreGraphics.CGImage> (handle, true);
@@ -239,7 +278,18 @@ namespace MonoDevelop.Components.AutoTest
 		// FIXME: This shouldn't be here.
 		public int ErrorCount (TaskSeverity severity)
 		{
-			return TaskService.Errors.Count (x => x.Severity == severity);
+			return IdeServices.TaskService.Errors.Count (x => x.Severity == severity);
+		}
+
+		public List<TaskListEntryDTO> GetErrors (TaskSeverity severity)
+		{
+			return IdeServices.TaskService.Errors.Where (x => x.Severity == severity).Select (x => new TaskListEntryDTO () {
+				Line = x.Line,
+				Description = x.Description,
+				File = x.FileName.FileName,
+				Path = x.FileName.FullPath,
+				Project = x.WorkspaceObject?.Name
+			}).ToList ();
 		}
 
 		object SafeObject (object ob)
@@ -320,12 +370,14 @@ namespace MonoDevelop.Components.AutoTest
 			AppQuery query = new AppQuery ();
 			query.SessionDebug = SessionDebug;
 
+			lock (queries)
+				queries.Add (query);
 			return query;
 		}
 
 		public void ExecuteOnIdle (Action idleFunc, bool wait = true, int timeout = 20000)
 		{
-			if (DispatchService.IsGuiThread) {
+			if (Runtime.IsMainThread) {
 				idleFunc ();
 				return;
 			}
@@ -371,7 +423,7 @@ namespace MonoDevelop.Components.AutoTest
 			try {
 				ExecuteOnIdle (() => {
 					resultSet = ExecuteQueryNoWait (query);
-				});
+				}, timeout: timeout);
 			} catch (TimeoutException e) {
 				throw new TimeoutException (string.Format ("Timeout while executing ExecuteQuery: {0}", query), e);
 			}
@@ -431,10 +483,27 @@ namespace MonoDevelop.Components.AutoTest
 			public TimeSpan TotalTime;
 		};
 
-		Counter GetCounterByIDOrName (string idOrName)
+		[Serializable]
+		public struct CounterContext {
+			public string CounterName;
+			public int InitialCount;
+		}
+
+		internal Counter GetCounterByIDOrName (string idOrName)
 		{
 			Counter c = InstrumentationService.GetCounterByID (idOrName);
 			return c ?? InstrumentationService.GetCounter (idOrName);
+		}
+
+		internal T GetCounterMetadataValue<T> (string counterName, string propertyName)
+		{
+			var counter = GetCounterByIDOrName (counterName);
+			var metadata = counter.LastValue.Metadata;
+			if (metadata != null && metadata.TryGetValue (propertyName, out var property)) {
+				return (T)Convert.ChangeType (property, typeof (T));
+			}
+
+			return default (T);
 		}
 
 		public TimerCounterContext CreateNewTimerContext (string counterName)
@@ -471,6 +540,40 @@ namespace MonoDevelop.Components.AutoTest
 			throw new TimeoutException ("Timed out waiting for event");
 		}
 
+		public CounterContext CreateNewCounterContext (string counterName)
+		{
+			var counter = GetCounterByIDOrName (counterName);
+			if (counter == null) {
+				throw new Exception ($"Unknown counter {counterName}");
+			}
+
+			var context = new CounterContext {
+				CounterName = counterName,
+				InitialCount = counter.Count
+			};
+
+			return context;
+		}
+
+		public void WaitForCounterToChange (CounterContext context, int timeout = 20000, int pollStep = 200)
+		{
+			var counter = GetCounterByIDOrName (context.CounterName);
+			if (counter == null) {
+				throw new Exception ($"Unknown counter {context.CounterName}");
+			}
+
+			do {
+				if (counter.Count != context.InitialCount) {
+					return;
+				}
+
+				timeout -= pollStep;
+				Thread.Sleep (pollStep);
+			} while (timeout > 0);
+
+			throw new TimeoutException ("Timed out waiting for counter");
+		}
+
 		public bool Select (AppResult result)
 		{
 			bool success = false;
@@ -493,6 +596,21 @@ namespace MonoDevelop.Components.AutoTest
 			try {
 				ExecuteOnIdle (() => {
 					success = result.Click ();
+				}, wait);
+			} catch (TimeoutException e) {
+				ThrowOperationTimeoutException ("Click", result.SourceQuery, result, e);
+			}
+
+			return success;
+		}
+
+		public bool Click (AppResult result, double x, double y, bool wait = true)
+		{
+			bool success = false;
+
+			try {
+				ExecuteOnIdle (() => {
+					success = result.Click (x, y);
 				}, wait);
 			} catch (TimeoutException e) {
 				ThrowOperationTimeoutException ("Click", result.SourceQuery, result, e);
@@ -555,6 +673,15 @@ namespace MonoDevelop.Components.AutoTest
 				ExecuteOnIdle (() => result.Flash ());
 			} catch (TimeoutException e) {
 				ThrowOperationTimeoutException ("Flash", result.SourceQuery, result, e);
+			}
+		}
+
+		public void SetProperty (AppResult result, string name, object o)
+		{
+			try {
+				ExecuteOnIdle (() => result.SetProperty (name, o));
+			} catch (TimeoutException e) {
+				ThrowOperationTimeoutException ("SetProperty", result.SourceQuery, result, e);
 			}
 		}
 

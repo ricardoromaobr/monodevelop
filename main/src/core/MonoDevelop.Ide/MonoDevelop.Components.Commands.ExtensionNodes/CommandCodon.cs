@@ -4,8 +4,6 @@
 // Author:
 //   Lluis Sanchez Gual
 //
-
-//
 // Copyright (C) 2005 Novell, Inc (http://www.novell.com)
 //
 // Permission is hereby granted, free of charge, to any person obtaining
@@ -15,10 +13,10 @@
 // distribute, sublicense, and/or sell copies of the Software, and to
 // permit persons to whom the Software is furnished to do so, subject to
 // the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be
 // included in all copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
 // EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
 // MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
@@ -28,22 +26,24 @@
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 
-
 using System;
-using System.Collections;
-using MonoDevelop.Core;
-using MonoDevelop.Components.Commands;
-using Mono.Addins;
-using System.ComponentModel;
 using System.Linq;
+using Mono.Addins;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.Components.Commands.ExtensionNodes
 {
 	[ExtensionNode (Description="A user interface command. The 'id' of the command must match the full name of an existing enumeration. An arbitrary string can also be used as an id for the command by just using '@' as prefix for the string.")]
 	internal class CommandCodon : TypeExtensionNode
 	{
+		//these fields are assigned by reflection, suppress "never assigned" warning
+		#pragma warning disable 649
+
 		[NodeAttribute ("_label", true, "Label", Localizable=true)]
 		string label;
+
+		[NodeAttribute ("_displayName", "Display Name of the command, visible in search results or key bindings option panel.", Localizable = true)]
+		string _displayName;
 		
 		[NodeAttribute ("_description", "Description of the command", Localizable=true)]
 		string _description;
@@ -71,7 +71,9 @@ namespace MonoDevelop.Components.Commands.ExtensionNodes
 		
 		[NodeAttribute("defaultHandler", "Class that handles this command. This property is optional.")]
 		string defaultHandler;
-		
+
+		#pragma warning restore 649
+
 		public override object CreateInstance ()
 		{
 			ActionType ct = ActionType.Normal;
@@ -148,6 +150,8 @@ namespace MonoDevelop.Components.Commands.ExtensionNodes
 			
 			cmd.Id = ParseCommandId (this);
 			cmd.Text = StringParserService.Parse (BrandingService.BrandApplicationName (label));
+			if (!String.IsNullOrWhiteSpace(_displayName))
+				cmd.DisplayName = StringParserService.Parse (BrandingService.BrandApplicationName (_displayName));
 			if ((_description != null) && (_description.Length > 0)){
 				cmd.Description = BrandingService.BrandApplicationName (_description);				
 			}
@@ -161,9 +165,9 @@ namespace MonoDevelop.Components.Commands.ExtensionNodes
 				keyBinding = winShortcut;
 			string[] splittedKeys = (keyBinding ?? "").Split (' ');
 
-			cmd.AccelKey = KeyBindingManager.CanonicalizeBinding (splittedKeys[0]);
+			cmd.AccelKey = KeyBindingManager.FixChordSeparators (KeyBindingManager.CanonicalizeBinding (splittedKeys[0]));
 			if (splittedKeys.Length > 1) {
-				cmd.AlternateAccelKeys = splittedKeys.Skip (1).ToArray ();
+				cmd.AlternateAccelKeys = splittedKeys.Skip (1).Select (KeyBindingManager.FixChordSeparators).ToArray ();
 			}
 			
 			cmd.DisabledVisible = disabledVisible;

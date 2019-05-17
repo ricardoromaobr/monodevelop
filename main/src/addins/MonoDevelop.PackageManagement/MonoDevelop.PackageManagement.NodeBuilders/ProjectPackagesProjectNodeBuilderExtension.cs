@@ -26,7 +26,6 @@
 
 using System;
 using System.Linq;
-using ICSharpCode.PackageManagement;
 using MonoDevelop.Core;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui.Components;
@@ -34,7 +33,7 @@ using MonoDevelop.Projects;
 
 namespace MonoDevelop.PackageManagement.NodeBuilders
 {
-	public class ProjectPackagesProjectNodeBuilderExtension : NodeBuilderExtension
+	internal class ProjectPackagesProjectNodeBuilderExtension : NodeBuilderExtension
 	{
 		IPackageManagementEvents packageManagementEvents;
 
@@ -44,6 +43,7 @@ namespace MonoDevelop.PackageManagement.NodeBuilders
 
 			packageManagementEvents.PackagesRestored += PackagesRestored;
 			packageManagementEvents.PackageOperationsStarting += PackageOperationsStarting;
+			packageManagementEvents.PackageOperationsFinished += PackageOperationsFinished;
 			packageManagementEvents.PackageOperationError += PackageOperationError;
 			packageManagementEvents.UpdatedPackagesAvailable += UpdatedPackagesAvailable;
 
@@ -60,6 +60,11 @@ namespace MonoDevelop.PackageManagement.NodeBuilders
 			RefreshAllChildNodes ();
 		}
 
+		void PackageOperationsFinished (object sender, EventArgs e)
+		{
+			RefreshAllChildNodes ();
+		}
+
 		void PackageOperationError (object sender, EventArgs e)
 		{
 			RefreshAllChildNodes ();
@@ -72,8 +77,8 @@ namespace MonoDevelop.PackageManagement.NodeBuilders
 
 		void RefreshAllChildNodes ()
 		{
-			DispatchService.GuiDispatch (() => {
-				foreach (DotNetProject project in IdeApp.Workspace.GetAllSolutionItems<DotNetProject> ()) {
+			Runtime.RunInMainThread (() => {
+				foreach (DotNetProject project in IdeApp.Workspace.GetAllItems<DotNetProject> ()) {
 					RefreshChildNodes (project);
 				}
 			});
@@ -83,7 +88,11 @@ namespace MonoDevelop.PackageManagement.NodeBuilders
 		{
 			ITreeBuilder builder = Context.GetTreeBuilder (project);
 			if (builder != null) {
-				builder.UpdateChildren ();
+				if (builder.MoveToChild (ProjectPackagesFolderNode.NodeName, typeof (ProjectPackagesFolderNode))) {
+					var packagesFolder = (ProjectPackagesFolderNode)builder.DataItem;
+					packagesFolder.RefreshPackages ();
+					builder.MoveToParent ();
+				}
 			}
 		}
 
@@ -93,8 +102,11 @@ namespace MonoDevelop.PackageManagement.NodeBuilders
 
 			packageManagementEvents.PackagesRestored -= PackagesRestored;
 			packageManagementEvents.PackageOperationsStarting -= PackageOperationsStarting;
+			packageManagementEvents.PackageOperationsFinished -= PackageOperationsFinished;
 			packageManagementEvents.PackageOperationError -= PackageOperationError;
 			packageManagementEvents.UpdatedPackagesAvailable -= UpdatedPackagesAvailable;
+
+			base.Dispose ();
 		}
 
 		public override bool CanBuildNode (Type dataType)
@@ -104,25 +116,36 @@ namespace MonoDevelop.PackageManagement.NodeBuilders
 
 		public override bool HasChildNodes (ITreeBuilder builder, object dataObject)
 		{
-			return true;
+			return ShowPackagesFolderForProject ((DotNetProject)dataObject);
+		}
+
+		bool ShowPackagesFolderForProject (DotNetProject project)
+		{
+			return !project.IsDotNetCoreProject ();
 		}
 
 		public override void BuildChildNodes (ITreeBuilder treeBuilder, object dataObject)
 		{
 			var project = (DotNetProject)dataObject;
-			treeBuilder.AddChild (new ProjectPackagesFolderNode (project));
+
+			if (!ShowPackagesFolderForProject (project))
+				return;
+
+			var folderNode = new ProjectPackagesFolderNode (project);
+			folderNode.RefreshPackages ();
+			treeBuilder.AddChild (folderNode);
 		}
 
 		void FileChanged (object sender, FileEventArgs e)
 		{
-			if (IsPackagesConfigFileChanged (e)) {
+			if (IsPackagesConfigOrProjectJsonFileChanged (e)) {
 				RefreshAllChildNodes ();
 			}
 		}
 
-		bool IsPackagesConfigFileChanged (FileEventArgs fileEventArgs)
+		bool IsPackagesConfigOrProjectJsonFileChanged (FileEventArgs fileEventArgs)
 		{
-			return fileEventArgs.Any (file => file.FileName.IsPackagesConfigFileName ());
+			return fileEventArgs.Any (file => file.FileName.IsPackagesConfigOrProjectJsonFileName ());
 		}
 	}
 }

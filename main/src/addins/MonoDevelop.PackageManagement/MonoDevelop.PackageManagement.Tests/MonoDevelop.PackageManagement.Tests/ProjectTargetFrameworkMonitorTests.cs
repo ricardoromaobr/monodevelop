@@ -102,16 +102,20 @@ namespace MonoDevelop.PackageManagement.Tests
 		}
 
 		[Test]
-		public void ProjectTargetFrameworkChanged_ProjectTargetFrameworkChanged_EventFires ()
+		public void ProjectTargetFrameworkChanged_ProjectTargetFrameworkChanged_EventFiresAfterProjectIsSaved ()
 		{
 			CreateProjectTargetFrameworkMonitor ();
 			FakeDotNetProject project = LoadSolutionWithOneProject ();
 			CaptureProjectTargetFrameworkChangedEvents ();
 
 			project.RaiseModifiedEvent (project, targetFrameworkPropertyName);
+			int eventArgsCountBeforeSave = eventArgs.Count;
+			project.RaiseSavedEvent ();
 
 			Assert.AreEqual (1, eventArgs.Count);
 			Assert.AreEqual (project, eventArgs [0].Project);
+			Assert.IsFalse (eventArgs [0].IsReload);
+			Assert.AreEqual (0, eventArgsCountBeforeSave);
 		}
 
 		[Test]
@@ -133,6 +137,7 @@ namespace MonoDevelop.PackageManagement.Tests
 			CaptureProjectTargetFrameworkChangedEvents ();
 
 			project.RaiseModifiedEvent (project, "SomeOtherProperty");
+			project.RaiseSavedEvent ();
 
 			Assert.AreEqual (0, eventArgs.Count);
 		}
@@ -145,9 +150,11 @@ namespace MonoDevelop.PackageManagement.Tests
 			CaptureProjectTargetFrameworkChangedEvents ();
 
 			project.RaiseModifiedEvent (project, targetFrameworkPropertyName.ToUpperInvariant ());
+			project.RaiseSavedEvent ();
 
 			Assert.AreEqual (1, eventArgs.Count);
 			Assert.AreEqual (project, eventArgs [0].Project);
+			Assert.IsFalse (eventArgs [0].IsReload);
 		}
 
 		[Test]
@@ -159,6 +166,7 @@ namespace MonoDevelop.PackageManagement.Tests
 			UnloadSolution ();
 
 			project.RaiseModifiedEvent (project, targetFrameworkPropertyName);
+			project.RaiseSavedEvent ();
 
 			Assert.AreEqual (0, eventArgs.Count);
 		}
@@ -172,9 +180,11 @@ namespace MonoDevelop.PackageManagement.Tests
 			FakeDotNetProject project = AddNewProjectToSolution ();
 
 			project.RaiseModifiedEvent (project, targetFrameworkPropertyName);
+			project.RaiseSavedEvent ();
 
 			Assert.AreEqual (1, eventArgs.Count);
 			Assert.AreEqual (project, eventArgs [0].Project);
+			Assert.IsFalse (eventArgs [0].IsReload);
 		}
 
 		[Test]
@@ -187,6 +197,7 @@ namespace MonoDevelop.PackageManagement.Tests
 			UnloadSolution ();
 
 			project.RaiseModifiedEvent (project, targetFrameworkPropertyName);
+			project.RaiseSavedEvent ();
 
 			Assert.AreEqual (0, eventArgs.Count);
 		}
@@ -201,6 +212,7 @@ namespace MonoDevelop.PackageManagement.Tests
 			FakeDotNetProject project = AddNewProjectToSolution ();
 
 			project.RaiseModifiedEvent (project, targetFrameworkPropertyName);
+			project.RaiseSavedEvent ();
 
 			Assert.AreEqual (0, eventArgs.Count);
 		}
@@ -217,6 +229,7 @@ namespace MonoDevelop.PackageManagement.Tests
 
 			Assert.AreEqual (1, eventArgs.Count);
 			Assert.AreEqual (reloadedProject, eventArgs [0].Project);
+			Assert.IsTrue (eventArgs [0].IsReload);
 		}
 
 		[Test]
@@ -270,10 +283,14 @@ namespace MonoDevelop.PackageManagement.Tests
 
 			firstProject.RaiseModifiedEvent (firstProject, targetFrameworkPropertyName);
 			secondProject.RaiseModifiedEvent (secondProject, targetFrameworkPropertyName);
+			firstProject.RaiseSavedEvent ();
+			secondProject.RaiseSavedEvent ();
 
 			Assert.AreEqual (2, eventArgs.Count);
 			Assert.AreEqual (firstProject, eventArgs [0].Project);
 			Assert.AreEqual (secondProject, eventArgs [1].Project);
+			Assert.IsFalse (eventArgs [0].IsReload);
+			Assert.IsFalse (eventArgs [1].IsReload);
 		}
 
 		[Test]
@@ -288,9 +305,12 @@ namespace MonoDevelop.PackageManagement.Tests
 
 			firstProject.RaiseModifiedEvent (firstProject, targetFrameworkPropertyName);
 			secondProject.RaiseModifiedEvent (secondProject, targetFrameworkPropertyName);
+			firstProject.RaiseSavedEvent ();
+			secondProject.RaiseSavedEvent ();
 
 			Assert.AreEqual (1, eventArgs.Count);
 			Assert.AreEqual (firstProject, eventArgs [0].Project);
+			Assert.IsFalse (eventArgs [0].IsReload);
 		}
 
 		[Test]
@@ -306,9 +326,77 @@ namespace MonoDevelop.PackageManagement.Tests
 
 			firstProject.RaiseModifiedEvent (firstProject, targetFrameworkPropertyName);
 			secondProject.RaiseModifiedEvent (secondProject, targetFrameworkPropertyName);
+			firstProject.RaiseSavedEvent ();
+			secondProject.RaiseSavedEvent ();
 
 			Assert.AreEqual (1, eventArgs.Count);
 			Assert.AreEqual (secondProject, eventArgs [0].Project);
+			Assert.IsFalse (eventArgs [0].IsReload);
+		}
+
+		[Test]
+		public void ProjectTargetFrameworkChanged_ProjectRemovedFromSolutionAndProjectTargetFrameworkChanged_EventDoesNotFire ()
+		{
+			CreateProjectTargetFrameworkMonitor ();
+			FakeDotNetProject originalProject = LoadSolutionWithOneProject ();
+			CaptureProjectTargetFrameworkChangedEvents ();
+			// Ensure IDotNetProject.Equals method is used since a new DotNetProjectProxy is
+			// created for the event so the object instances will be different and just removing
+			// the instance from the list matching the instance is incorrect. 
+			var project = new FakeDotNetProject ();
+			originalProject.EqualsAction = p => p == project;
+			solution.RaiseProjectRemovedEvent (project);
+
+			originalProject.RaiseModifiedEvent (originalProject, targetFrameworkPropertyName);
+			originalProject.RaiseSavedEvent ();
+
+			Assert.AreEqual (0, eventArgs.Count);
+		}
+
+		[Test]
+		public void ProjectTargetFrameworkChanged_ProjectNotSaved_EventDoesNotFire ()
+		{
+			CreateProjectTargetFrameworkMonitor ();
+			FakeDotNetProject project = LoadSolutionWithOneProject ();
+			CaptureProjectTargetFrameworkChangedEvents ();
+
+			project.RaiseModifiedEvent (project, targetFrameworkPropertyName);
+
+			Assert.AreEqual (0, eventArgs.Count);
+		}
+
+		[Test]
+		public void ProjectTargetFrameworkChanged_ProjectTargetFrameworkChangedAndProjectSavedTwiceAfterwards_EventFiresOnce ()
+		{
+			CreateProjectTargetFrameworkMonitor ();
+			FakeDotNetProject project = LoadSolutionWithOneProject ();
+			CaptureProjectTargetFrameworkChangedEvents ();
+
+			project.RaiseModifiedEvent (project, targetFrameworkPropertyName);
+			project.RaiseSavedEvent ();
+			project.RaiseSavedEvent ();
+
+			Assert.AreEqual (1, eventArgs.Count);
+			Assert.AreEqual (project, eventArgs [0].Project);
+			Assert.IsFalse (eventArgs [0].IsReload);
+		}
+
+		/// <summary>
+		/// Ensures the ProjectSaved event handler is removed when the solution is unloaded.
+		/// </summary>
+		/// <returns>The target framework changed project target framework changed solution unloaded then project saved event does not fire.</returns>
+		[Test]
+		public void ProjectTargetFrameworkChanged_ProjectTargetFrameworkChangedSolutionUnloadedThenProjectSaved_EventDoesNotFire ()
+		{
+			CreateProjectTargetFrameworkMonitor ();
+			FakeDotNetProject project = LoadSolutionWithOneProject ();
+			CaptureProjectTargetFrameworkChangedEvents ();
+			project.RaiseModifiedEvent (project, targetFrameworkPropertyName);
+			UnloadSolution ();
+
+			project.RaiseSavedEvent ();
+
+			Assert.AreEqual (0, eventArgs.Count);
 		}
 	}
 }

@@ -30,6 +30,7 @@ using System;
 using MonoDevelop.Components.Commands;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui;
+using MonoDevelop.Ide.Gui.Shell;
 
 namespace MonoDevelop.DesignerSupport
 {
@@ -83,7 +84,11 @@ namespace MonoDevelop.DesignerSupport
 			if (ob == ((DefaultWorkbench)IdeApp.Workbench.RootWindow).ActiveWorkbenchWindow)
 				visitedCurrentDoc = true;
 
-			if (ob is PropertyPad) {
+			if (ob is MonoDevelop.Components.Docking.AutoHideBox) {
+				found = true;
+				return true;
+			}
+			if (ob is IPropertyPad) {
 				// Don't change the property grid selection when the focus is inside the property grid itself
 				found = true;
 				return true;

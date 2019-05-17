@@ -35,8 +35,10 @@ using System.ComponentModel;
 
 namespace MonoDevelop.VersionControl.Git
 {
-	partial class EditBranchDialog : Dialog
+	partial class EditBranchDialog : Gtk.Dialog
 	{
+		const int GitRefnameMax = 1024;
+
 		readonly ListStore comboStore;
 		readonly string currentTracking;
 		readonly string oldName;
@@ -80,6 +82,8 @@ namespace MonoDevelop.VersionControl.Git
 			checkTrack.Active = !string.IsNullOrEmpty (tracking);
 
 			UpdateStatus ();
+
+			WidthRequest = 400;
 		}
 
 		void AddValues (string name, Xwt.Drawing.Image icon, string prefix)
@@ -120,13 +124,17 @@ namespace MonoDevelop.VersionControl.Git
 			comboSources.Sensitive = checkTrack.Active;
 			buttonOk.Sensitive = entryName.Text.Length > 0;
 			if (oldName != entryName.Text && repo.GetBranches ().Any (b => b.FriendlyName == entryName.Text)) {
-				labelError.Markup = "<span color='red'>" + GettextCatalog.GetString ("A branch with this name already exists") + "</span>";
+				labelError.Markup = "<span color='" + Ide.Gui.Styles.ErrorForegroundColor.ToHexString (false) + "'>" + GettextCatalog.GetString ("A branch with this name already exists") + "</span>";
 				labelError.Show ();
 				buttonOk.Sensitive = false;
 			} else if (!Reference.IsValidName ("refs/" + entryName.Text)) {
-				labelError.Markup = "<span color='red'>" + GettextCatalog.GetString (@"A branch name can not:
+				labelError.Markup = "<span color='" + Ide.Gui.Styles.ErrorForegroundColor.ToHexString (false) + "'>" + GettextCatalog.GetString (@"A branch name can not:
 Start with '.' or end with '/' or '.lock'
 Contain a ' ', '..', '~', '^', ':', '\', '?', '['") + "</span>";
+				labelError.Show ();
+				buttonOk.Sensitive = false;
+			} else if (entryName.Text.Length > GitRefnameMax) {
+				labelError.Markup = "<span color='" + Ide.Gui.Styles.ErrorForegroundColor.ToHexString (false) + "'>" + GettextCatalog.GetString ("Branch name too long") + "</span>";
 				labelError.Show ();
 				buttonOk.Sensitive = false;
 			} else

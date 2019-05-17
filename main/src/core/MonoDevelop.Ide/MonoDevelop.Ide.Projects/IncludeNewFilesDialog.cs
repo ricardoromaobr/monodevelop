@@ -1,4 +1,4 @@
-// 
+﻿// 
 // IncludeNewFilesDialog.cs
 //  
 // Author:
@@ -56,7 +56,8 @@ namespace MonoDevelop.Ide.Projects
 			this.baseDirectory = baseDirectory;
 			
 			treeviewFiles.Model = store;
-			
+			treeviewFiles.SearchColumn = -1; // disable the interactive search
+
 			treeviewFiles.HeadersVisible = false; // Headers are untranslated because they're hidden as default
 			
 			TreeViewColumn textColumn = new TreeViewColumn ();
@@ -206,7 +207,7 @@ namespace MonoDevelop.Ide.Projects
 			TreeIter iter = GetPath (relativePath.ParentDirectory);
 			object[] values = new object[] {
 				//FIXME: look these pixbufs up lazily in the renderer
-				DesktopService.GetIconForFile (filePath, IconSize.Menu),
+				IdeServices.DesktopService.GetIconForFile (filePath, IconSize.Menu),
 				null,
 				filePath.FileName,
 				filePath.ToString (),

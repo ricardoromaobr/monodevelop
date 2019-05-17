@@ -30,45 +30,93 @@
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 
-using System;
-
 using MonoDevelop.Ide.Gui;
 
-using MonoDevelop.DesignerSupport;
 using pg = MonoDevelop.Components.PropertyGrid;
 using MonoDevelop.Components.Docking;
 using System.Collections.Generic;
 using MonoDevelop.Components.Commands;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Commands;
+using MonoDevelop.Components;
+using System;
+using Gtk;
+using MonoDevelop.Core.FeatureConfiguration;
 
 namespace MonoDevelop.DesignerSupport
 {
-	
-	public class PropertyPad : AbstractPadContent, ICommandDelegator
+	public class PropertyPad : PadContent, ICommandDelegator, IPropertyPad
 	{
+		public event EventHandler PropertyGridChanged;
+
+		readonly bool isNative;
+		readonly IPropertyGrid propertyGrid;
+#if MAC
+		MacPropertyGrid nativeGrid;
+		Gtk.Widget gtkWidget;
+#endif
 		pg.PropertyGrid grid;
+
 		InvisibleFrame frame;
 		bool customWidget;
 		IPadWindow container;
 		DockToolbarProvider toolbarProvider = new DockToolbarProvider ();
 
 		internal object CommandRouteOrigin { get; set; }
-		
+
+
 		public PropertyPad ()
 		{
-			grid = new pg.PropertyGrid ();
 			frame = new InvisibleFrame ();
-			frame.Add (grid);
-			
+
+#if MAC
+			isNative = FeatureSwitchService.IsFeatureEnabled ("NativePropertyPanel") ?? false;
+
+			if (isNative) {
+
+				nativeGrid = new MacPropertyGrid ();
+				propertyGrid = nativeGrid;
+
+				gtkWidget = Components.Mac.GtkMacInterop.NSViewToGtkWidget (nativeGrid);
+				gtkWidget.CanFocus = true;
+				gtkWidget.Sensitive = true;
+				gtkWidget.Focused += Widget_Focused;
+
+				nativeGrid.Focused += PropertyGrid_Focused;
+				frame.Add (gtkWidget);
+			} else {
+#endif
+				grid = new pg.PropertyGrid ();
+				propertyGrid = grid;
+				grid.Changed += Grid_Changed;
+				frame.Add (grid);
+#if MAC
+			}
+#endif
 			frame.ShowAll ();
 		}
-		
-		public override void Initialize (IPadWindow container)
+
+		void Grid_Changed (object sender, EventArgs e)
+		{
+			PropertyGridChanged?.Invoke (this, e);
+		}
+#if MAC
+		void Widget_Focused (object o, Gtk.FocusedArgs args)
+		{
+			nativeGrid.Window.MakeFirstResponder (nativeGrid);
+		}
+#endif
+		protected override void Initialize (IPadWindow container)
 		{
 			base.Initialize (container);
-			toolbarProvider.Attach (container.GetToolbar (Gtk.PositionType.Top));
-			grid.SetToolbarProvider (toolbarProvider);
+			toolbarProvider.Attach (container.GetToolbar (DockPositionType.Top));
+
+			propertyGrid.SetToolbarProvider (toolbarProvider);
+
+			//native cocoa needs content shown to initialize stuff
+			if (isNative) {
+				container.PadContentShown += Window_PadContentShown;
+			}
 			this.container = container;
 			DesignerSupport.Service.SetPad (this);
 		}
@@ -77,20 +125,33 @@ namespace MonoDevelop.DesignerSupport
 			get { return container; }
 		}
 		
-		#region AbstractPadContent implementations
+#region AbstractPadContent implementations
 		
-		public override Gtk.Widget Control {
+		public override Control Control {
 			get { return frame; }
 		}
 		
 		public override void Dispose()
 		{
+#if MAC
+			if (isNative) {
+				container.PadContentShown -= Window_PadContentShown;
+				nativeGrid.Focused -= PropertyGrid_Focused;
+				gtkWidget.Focused -= Widget_Focused;
+			} else {
+#endif
+				grid.Changed -= Grid_Changed;
+#if MAC
+			}
+#endif
+			propertyGrid.Dispose ();
 			DesignerSupport.Service.SetPad (null);
+			base.Dispose ();
 		}
 		
-		#endregion
+#endregion
 
-		#region ICommandDelegatorRouter implementation
+#region ICommandDelegatorRouter implementation
 
 		object ICommandDelegator.GetDelegatedCommandTarget ()
 		{
@@ -103,28 +164,64 @@ namespace MonoDevelop.DesignerSupport
 				return null;
 		}
 
-		#endregion
-		
-		//Grid consumers must call this when they lose focus!
-		public void BlankPad ()
-		{
-			PropertyGrid.CurrentObject = null;
-			CommandRouteOrigin = null;
+#endregion
+
+		public bool IsGridEditing {
+			get {
+				AttachToolbarIfCustomWidget ();
+				return propertyGrid.IsEditing;
+ 			}
 		}
-		
+
+		//HACK: Mocked gtk property grid to satisfy for customizer.Customize call
+		readonly static pg.PropertyGrid pGrid = new pg.PropertyGrid ();
 		internal pg.PropertyGrid PropertyGrid {
 			get {
-				if (customWidget) {
-					customWidget = false;
-					frame.Remove (frame.Child);
-					frame.Add (grid);
-					toolbarProvider.Attach (container.GetToolbar (Gtk.PositionType.Top));
-				}
-				
-				return grid;
+				AttachToolbarIfCustomWidget ();
+				return isNative ? pGrid : grid;
 			}
 		}
-		
+
+		public void BlankPad ()
+		{
+			if (isNative) {
+				AttachToolbarIfCustomWidget ();
+			}
+			propertyGrid.BlankPad ();
+			CommandRouteOrigin = null;
+		}
+
+		void Window_PadContentShown (object sender, EventArgs e)
+		{
+			propertyGrid.OnPadContentShown ();
+		}
+#if MAC
+		void PropertyGrid_Focused (object sender, EventArgs e)
+		{
+			if (!gtkWidget.HasFocus) {
+				gtkWidget.HasFocus = true;
+			}
+		}
+#endif
+		void AttachToolbarIfCustomWidget ()
+		{
+			if (customWidget) {
+				customWidget = false;
+				frame.Remove (frame.Child);
+
+#if MAC
+				if (isNative) {
+					frame.Add (gtkWidget);
+				} else {
+#endif
+					frame.Add (grid);
+#if MAC
+				}
+#endif
+				toolbarProvider.Attach (container.GetToolbar (DockPositionType.Top));
+			}
+		}
+
 		internal void UseCustomWidget (Gtk.Widget widget)
 		{
 			toolbarProvider.Attach (null);
@@ -138,13 +235,24 @@ namespace MonoDevelop.DesignerSupport
 		void ClearToolbar ()
 		{
 			if (container != null) {
-				var toolbar = container.GetToolbar (Gtk.PositionType.Top);
+				var toolbar = container.GetToolbar (DockPositionType.Top);
 				foreach (var w in toolbar.Children)
 					toolbar.Remove (w);
 			}
 		}
+
+		public void SetCurrentObject (object lastComponent, object [] propertyProviders)
+		{
+			AttachToolbarIfCustomWidget ();
+			propertyGrid.SetCurrentObject (lastComponent, propertyProviders);
+		}
+
+		public void PopulateGrid (bool saveEditSession)
+		{
+			propertyGrid.Populate (saveEditSession);
+		}
 	}
-	
+
 	class DockToolbarProvider: pg.PropertyGrid.IToolbarProvider
 	{
 		DockItemToolbar tb;
@@ -169,7 +277,7 @@ namespace MonoDevelop.DesignerSupport
 			}
 		}
 		
-		#region IToolbarProvider implementation
+#region IToolbarProvider implementation
 		public void Insert (Gtk.Widget w, int pos)
 		{
 			if (tb != null)
@@ -211,7 +319,7 @@ namespace MonoDevelop.DesignerSupport
 			}
 		}
 		
-		#endregion
+#endregion
 	}
 
 	class InvisibleFrame : Gtk.Alignment
@@ -230,4 +338,5 @@ namespace MonoDevelop.DesignerSupport
 			return old;
 		}
 	}
+
 }

@@ -25,10 +25,10 @@
 // THE SOFTWARE.
 
 using System.Linq;
+using System.Threading.Tasks;
 using Mono.Addins;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui;
-using MonoDevelop.VersionControl.Views;
 
 namespace MonoDevelop.VersionControl
 {
@@ -40,18 +40,17 @@ namespace MonoDevelop.VersionControl
 		{
 			return !item.IsDirectory
 				&& item.VersionInfo.IsVersioned
-				&& AddinManager.GetExtensionObjects<IMergeViewHandler> (MergeViewHandlers).Any (h => h.CanHandle (item, null));
+				&& AddinManager.GetExtensionObjects<IVersionControlViewHandler> (MergeViewHandlers).Any (h => h.CanHandle (item, null));
 		}
 		
-		public static bool Show (VersionControlItemList items, bool test)
+		public static async Task<bool> Show (VersionControlItemList items, bool test)
 		{
 			if (test)
 				return items.All (CanShow);
 			
 			foreach (var item in items) {
-				var document = IdeApp.Workbench.OpenDocument (item.Path, OpenDocumentOptions.Default | OpenDocumentOptions.OnlyInternalViewer);
-				if (document != null)
-					document.Window.SwitchView (document.Window.FindView<IMergeView> ());
+				var document = await IdeApp.Workbench.OpenDocument (item.Path, item.ContainerProject, OpenDocumentOptions.Default | OpenDocumentOptions.OnlyInternalViewer);
+				document?.GetContent<VersionControlDocumentController> ()?.ShowMergeView ();
 			}
 			
 			return true;

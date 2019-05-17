@@ -49,15 +49,8 @@
 		<FileTemplate id = "PartialActionGroupFileTemplate" resource = "ActionGroupPartial.xft.xml"/>
 	</Extension>
 	
-	<Extension path = "/MonoDevelop/Ide/DisplayBindings">
-		<DisplayBinding insertbefore = "DefaultDisplayBinding"
-		       class = "MonoDevelop.GtkCore.GuiBuilder.GuiBuilderDisplayBinding" />
-		<DisplayBinding 
-		       class = "MonoDevelop.GtkCore.GuiBuilder.ActionGroupDisplayBinding" />
-	</Extension>
-	
 	<Extension path = "/MonoDevelop/Ide/Commands">
-		<Category _name = "Gtk# Designer" id = "GtkCore">
+		<Category _name = "Designer (Gtk#)" id = "GtkCore">
 		<Command id = "MonoDevelop.GtkCore.GtkCommands.AddNewDialog"
 				icon = "md-gtkcore-dialog"
 				_label = "New Dialog..." />
@@ -75,7 +68,7 @@
 		<Command id = "MonoDevelop.GtkCore.GtkCommands.EditIcons"
 				_label = "Edit Project Icons..." />
 		<Command id = "MonoDevelop.GtkCore.GtkCommands.GtkSettings"
-				_label = "GTK# support settings..." />
+				_label = "GTK# Support Settings..." />
 		</Category>
 	</Extension>
 	
@@ -115,13 +108,6 @@
 		<CommandItem id = "MonoDevelop.GtkCore.GtkCommands.EditIcons" />
 	</Extension>
 	
-	<Extension path = "/MonoDevelop/ProjectModel/ExtendedProperties">
-		<ItemProperty class = "MonoDevelop.Projects.Project"
-		              name = "GtkDesignInfo"
-		              skipEmpty = "True"
-		              type = "MonoDevelop.GtkCore.GtkDesignInfo" />
-	</Extension>
-	
 	<Extension path = "/MonoDevelop/Ide/StartupHandlers">
 		<Class class="MonoDevelop.GtkCore.GtkCoreStartupCommand" />
 	</Extension>
@@ -146,7 +132,7 @@
 		<StockIcon stockid = "md-gtkcore-actiongroup" resource = "actiongroup.png" />
 	</Extension>
 	
-	<Extension path = "/MonoDevelop/ProjectModel/ProjectServiceExtensions">
+	<Extension path = "/MonoDevelop/ProjectModel/ProjectModelExtensions">
 		<Class class = "MonoDevelop.GtkCore.GuiBuilder.GtkProjectServiceExtension"  insertafter="MidStep"/>
 	</Extension>
 	

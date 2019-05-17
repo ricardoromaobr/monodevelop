@@ -1,4 +1,4 @@
-//
+﻿//
 // IgnoreCommand.cs
 //
 // Author:
@@ -62,7 +62,7 @@ namespace MonoDevelop.VersionControl
 			}
 		}
 
-		private class IgnoreWorker : Task
+		private class IgnoreWorker : VersionControlTask
 		{
 			VersionControlItemList items;
 
@@ -78,14 +78,16 @@ namespace MonoDevelop.VersionControl
 
 			protected override void Run ()
 			{
-				foreach (VersionControlItemList list in items.SplitByRepository ())
-					list[0].Repository.Ignore (list.Paths);
-
-				Gtk.Application.Invoke (delegate {
-					foreach (VersionControlItem item in items)
-						if (!item.IsDirectory)
-							FileService.NotifyFileChanged (item.Path);
-
+				foreach (VersionControlItemList list in items.SplitByRepository ()) {
+					try {
+						list [0].Repository.Ignore (list.Paths);
+					} catch (Exception ex) {
+						LoggingService.LogError ("Ignore operation failed", ex);
+						Monitor.ReportError (ex.Message, null);
+						return;
+					}
+				}
+				Gtk.Application.Invoke ((o, args) => {
 					VersionControlService.NotifyFileStatusChanged (items);
 				});
 				Monitor.ReportSuccess (GettextCatalog.GetString ("Ignore operation completed."));
@@ -125,7 +127,7 @@ namespace MonoDevelop.VersionControl
 			}
 		}
 
-		private class UnignoreWorker : Task
+		private class UnignoreWorker : VersionControlTask
 		{
 			VersionControlItemList items;
 
@@ -141,14 +143,17 @@ namespace MonoDevelop.VersionControl
 
 			protected override void Run ()
 			{
-				foreach (VersionControlItemList list in items.SplitByRepository ())
-					list[0].Repository.Unignore (list.Paths);
+				foreach (VersionControlItemList list in items.SplitByRepository ()) {
+					try {
+						list [0].Repository.Unignore (list.Paths);
+					} catch (Exception ex) {
+						LoggingService.LogError ("Unignore operation failed", ex);
+						Monitor.ReportError (ex.Message, null);
+						return;
+					}
+				}
 
-				Gtk.Application.Invoke (delegate {
-					foreach (VersionControlItem item in items)
-						if (!item.IsDirectory)
-							FileService.NotifyFileChanged (item.Path);
-
+				Gtk.Application.Invoke ((o, args) => {
 					VersionControlService.NotifyFileStatusChanged (items);
 				});
 				Monitor.ReportSuccess (GettextCatalog.GetString ("Unignore operation completed."));

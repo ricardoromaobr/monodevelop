@@ -1,5 +1,5 @@
-// 
-// FontService.cs
+﻿// 
+// IdeServices.FontService.cs
 //  
 // Author:
 //       Mike Krüger <mkrueger@novell.com>
@@ -27,50 +27,45 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Mono.Addins;
 using MonoDevelop.Core;
 using Pango;
 
 namespace MonoDevelop.Ide.Fonts
 {
-	public static class FontService
+	[DefaultServiceImplementation]
+	public class FontService: Service
 	{
-		static List<FontDescriptionCodon> fontDescriptions = new List<FontDescriptionCodon> ();
-		static Dictionary<string, FontDescription> loadedFonts = new Dictionary<string, FontDescription> ();
-		static Properties fontProperties;
+		List<FontDescriptionCodon> fontDescriptions = new List<FontDescriptionCodon> ();
+		Dictionary<string, FontDescription> loadedFonts = new Dictionary<string, FontDescription> ();
+		Properties fontProperties;
+		DesktopService desktopService;
 
-		static string defaultMonospaceFontName, defaultSansFontName;
-		static FontDescription defaultMonospaceFont, defaultSansFont;
+		string defaultMonospaceFontName = String.Empty;
+		FontDescription defaultMonospaceFont = new FontDescription ();
 
-		static void LoadDefaults ()
+		void LoadDefaults ()
 		{
 			if (defaultMonospaceFont != null) {
 				defaultMonospaceFont.Dispose ();
-				defaultSansFont.Dispose ();
 			}
 
 			#pragma warning disable 618
-			defaultMonospaceFontName = DesktopService.DefaultMonospaceFont;
+			defaultMonospaceFontName = desktopService.DefaultMonospaceFont;
 			defaultMonospaceFont = FontDescription.FromString (defaultMonospaceFontName);
 			#pragma warning restore 618
-
-			var label = new Gtk.Label ("");
-			defaultSansFont = label.Style.FontDescription.Copy ();
-			label.Destroy ();
-			defaultSansFontName = defaultSansFont.ToString ();
 		}
 		
-		internal static IEnumerable<FontDescriptionCodon> FontDescriptions {
+		internal IEnumerable<FontDescriptionCodon> FontDescriptions {
 			get {
 				return fontDescriptions;
 			}
 		}
-		
-		internal static void Initialize ()
-		{
-			if (fontProperties != null)
-				throw new InvalidOperationException ("Already initialized");
 
+		protected override async Task OnInitialize (ServiceProvider serviceProvider)
+		{
+			desktopService = await serviceProvider.GetService<DesktopService> ();
 			fontProperties = PropertyService.Get ("FontProperties", new Properties ());
 			
 			AddinManager.AddExtensionNodeHandler ("/MonoDevelop/Ide/Fonts", delegate(object sender, ExtensionNodeEventArgs args) {
@@ -90,40 +85,40 @@ namespace MonoDevelop.Ide.Fonts
 			LoadDefaults ();
 		}
 
-		public static FontDescription MonospaceFont { get { return defaultMonospaceFont; } }
-		public static FontDescription SansFont { get { return defaultSansFont; } }
+		public FontDescription MonospaceFont { get { return defaultMonospaceFont; } }
+		public FontDescription SansFont { get { return Gui.Styles.DefaultFont; } }
 
-		public static string MonospaceFontName { get { return defaultMonospaceFontName; } }
-		public static string SansFontName { get { return defaultSansFontName; } }
+		public string MonospaceFontName { get { return defaultMonospaceFontName; } }
+		public string SansFontName { get { return Gui.Styles.DefaultFontName; } }
 
 		[Obsolete ("Use MonospaceFont")]
-		public static FontDescription DefaultMonospaceFontDescription {
+		public FontDescription DefaultMonospaceFontDescription {
 			get {
 				if (defaultMonospaceFont == null)
-					defaultMonospaceFont = LoadFont (DesktopService.DefaultMonospaceFont);
+					defaultMonospaceFont = LoadFont (desktopService.DefaultMonospaceFont);
 				return defaultMonospaceFont;
 			}
 		}
 
-		static FontDescription LoadFont (string name)
+		FontDescription LoadFont (string name)
 		{
 			var fontName = FilterFontName (name);
 			return FontDescription.FromString (fontName);
 		}
 		
-		public static string FilterFontName (string name)
+		public string FilterFontName (string name)
 		{
 			switch (name) {
 			case "_DEFAULT_MONOSPACE":
 				return defaultMonospaceFontName;
 			case "_DEFAULT_SANS":
-				return defaultSansFontName;
+				return SansFontName;
 			default:
 				return name;
 			}
 		}
 		
-		public static string GetUnderlyingFontName (string name)
+		public string GetUnderlyingFontName (string name)
 		{
 			var result = fontProperties.Get<string> (name);
 			
@@ -148,14 +143,14 @@ namespace MonoDevelop.Ide.Fonts
 		/// <param name='createDefaultFont'>
 		/// If set to <c>false</c> and no custom font has been set, the method will return null.
 		/// </param>
-		public static FontDescription GetFontDescription (string name, bool createDefaultFont = true)
+		public FontDescription GetFontDescription (string name, bool createDefaultFont = true)
 		{
 			if (loadedFonts.ContainsKey (name))
 				return loadedFonts [name];
 			return loadedFonts [name] = LoadFont (GetUnderlyingFontName (name));
 		}
 		
-		internal static FontDescriptionCodon GetFont (string name)
+		internal FontDescriptionCodon GetFont (string name)
 		{
 			foreach (var d in fontDescriptions) {
 				if (d.Name == name)
@@ -165,7 +160,7 @@ namespace MonoDevelop.Ide.Fonts
 			return null;
 		}
 		
-		public static void SetFont (string name, string value)
+		public void SetFont (string name, string value)
 		{
 			if (loadedFonts.ContainsKey (name)) 
 				loadedFonts.Remove (name);
@@ -181,19 +176,46 @@ namespace MonoDevelop.Ide.Fonts
 				callbacks.ForEach (c => c ());
 			}
 		}
+
+		internal ConfigurationProperty<FontDescription> GetFontProperty (string name)
+		{
+			return new FontConfigurationProperty (name);
+		}
 		
-		static Dictionary<string, List<Action>> fontChangeCallbacks = new Dictionary<string, List<Action>> ();
-		public static void RegisterFontChangedCallback (string fontName, Action callback)
+		Dictionary<string, List<Action>> fontChangeCallbacks = new Dictionary<string, List<Action>> ();
+		public void RegisterFontChangedCallback (string fontName, Action callback)
 		{
 			if (!fontChangeCallbacks.ContainsKey (fontName))
 				fontChangeCallbacks [fontName] = new List<Action> ();
 			fontChangeCallbacks [fontName].Add (callback);
 		}
 		
-		public static void RemoveCallback (Action callback)
+		public void RemoveCallback (Action callback)
 		{
 			foreach (var list in fontChangeCallbacks.Values.ToList ())
 				list.Remove (callback);
+		}
+	}
+
+	class FontConfigurationProperty: ConfigurationProperty<FontDescription>
+	{
+		string name;
+
+		public FontConfigurationProperty (string name)
+		{
+			this.name = name;
+			IdeServices.FontService.RegisterFontChangedCallback (name, OnChanged);
+		}
+
+		protected override FontDescription OnGetValue ()
+		{
+			return IdeServices.FontService.GetFontDescription (name);
+		}
+
+		protected override bool OnSetValue (FontDescription value)
+		{
+			IdeServices.FontService.SetFont (name, value.ToString ());
+			return true;
 		}
 	}
 
@@ -211,6 +233,17 @@ namespace MonoDevelop.Ide.Fonts
 
 			return font;
 		}
+		public static FontDescription CopyModified (this FontDescription font, int absoluteResize, Pango.Weight? weight = null)
+		{
+			font = font.Copy ();
+
+			ResizeAbsolute (font, absoluteResize);
+
+			if (weight.HasValue)
+				font.Weight = weight.Value;
+
+			return font;
+		}
 
 		static void Scale (FontDescription font, double scale)
 		{
@@ -222,6 +255,39 @@ namespace MonoDevelop.Ide.Fonts
 					size = (int)(10 * Pango.Scale.PangoScale); 
 				font.Size = (int)(Pango.Scale.PangoScale * (int)(scale * size / Pango.Scale.PangoScale));
 			}
+		}
+
+		static void ResizeAbsolute (FontDescription font, int pt)
+		{
+			if (font.SizeIsAbsolute) {
+				font.AbsoluteSize = font.Size + pt;
+			} else {
+				var size = font.Size;
+				if (size == 0)
+					size = (int)((10 + pt) * Pango.Scale.PangoScale);
+				font.Size = (int)(Pango.Scale.PangoScale * (int)(pt + size / Pango.Scale.PangoScale));
+			}
+		}
+
+		public static FontDescription ToPangoFont (this Xwt.Drawing.Font font)
+		{
+			var backend = Xwt.Toolkit.GetBackend (font) as FontDescription;
+			if (backend != null)
+				return backend.Copy ();
+			return FontDescription.FromString (font.ToString ());
+		}
+
+		public static Xwt.Drawing.Font ToXwtFont (this FontDescription font)
+		{
+			return font.ToXwtFont (null);
+		}
+
+		public static Xwt.Drawing.Font ToXwtFont (this FontDescription font, Xwt.Toolkit withToolkit)
+		{
+			var toolkit = withToolkit ?? Xwt.Toolkit.CurrentEngine;
+			Xwt.Drawing.Font xwtFont = null;
+			toolkit.Invoke (() => xwtFont = Xwt.Drawing.Font.FromName (font.ToString ()));
+			return xwtFont;
 		}
 	}
 }

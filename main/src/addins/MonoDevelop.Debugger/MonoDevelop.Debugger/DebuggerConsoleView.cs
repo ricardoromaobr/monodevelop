@@ -30,6 +30,8 @@ using System.Collections.Generic;
 using MonoDevelop.Ide;
 using MonoDevelop.Components;
 using MonoDevelop.Ide.CodeCompletion;
+using MonoDevelop.Ide.Editor.Extension;
+using System.Threading;
 
 namespace MonoDevelop.Debugger
 {
@@ -51,7 +53,7 @@ namespace MonoDevelop.Debugger
 			TextView.KeyReleaseEvent += OnEditKeyRelease;
 			TextView.FocusOutEvent += TextView_FocusOutEvent;
 
-			IdeApp.Preferences.CustomOutputPadFontChanged += OnCustomOutputPadFontChanged;
+			IdeApp.Preferences.CustomOutputPadFont.Changed += OnCustomOutputPadFontChanged;
 			CompletionWindowManager.WindowClosed += OnCompletionWindowClosed;
 		}
 
@@ -74,14 +76,6 @@ namespace MonoDevelop.Debugger
 			}
 		}
 
-		static Mono.Debugging.Client.CompletionData GetCompletionData (string exp)
-		{
-			if (DebuggingService.CurrentFrame != null)
-				return DebuggingService.CurrentFrame.GetExpressionCompletionData (exp);
-
-			return null;
-		}
-
 		void OnCompletionWindowClosed (object sender, EventArgs e)
 		{
 			currentCompletionData = null;
@@ -92,19 +86,25 @@ namespace MonoDevelop.Debugger
 			return char.IsLetter (c) || c == '_' || c == '.';
 		}
 
-		void PopupCompletion ()
+		CancellationTokenSource cts = new CancellationTokenSource ();
+		async void PopupCompletion ()
 		{
-			char c = (char)Gdk.Keyval.ToUnicode (keyValue);
-			if (currentCompletionData == null && IsCompletionChar (c)) {
-				string expr = Buffer.GetText (TokenBegin, Cursor, false);
-				currentCompletionData = GetCompletionData (expr);
-				if (currentCompletionData != null) {
-					DebugCompletionDataList dataList = new DebugCompletionDataList (currentCompletionData);
-					ctx = ((ICompletionWidget)this).CreateCodeCompletionContext (expr.Length - currentCompletionData.ExpressionLength);
-					CompletionWindowManager.ShowWindow (null, c, dataList, this, ctx);
-				} else {
-					currentCompletionData = null;
+			try {
+				char c = (char)Gdk.Keyval.ToUnicode (keyValue);
+				if (currentCompletionData == null && IsCompletionChar (c)) {
+					string expr = Buffer.GetText (TokenBegin, Cursor, false);
+					cts.Cancel ();
+					cts = new CancellationTokenSource ();
+					if (DebuggingService.CurrentFrame == null)
+						return;
+					currentCompletionData = await DebuggingService.GetCompletionDataAsync (DebuggingService.CurrentFrame, expr, cts.Token);
+					if (currentCompletionData != null) {
+						DebugCompletionDataList dataList = new DebugCompletionDataList (currentCompletionData);
+						ctx = ((ICompletionWidget)this).CreateCodeCompletionContext (expr.Length - currentCompletionData.ExpressionLength);
+						CompletionWindowManager.ShowWindow (null, c, dataList, this, ctx);
+					}
 				}
+			} catch (OperationCanceledException) {
 			}
 		}
 
@@ -274,7 +274,7 @@ namespace MonoDevelop.Debugger
 			if (keyHandled)
 				return;
 
-			CompletionWindowManager.PostProcessKeyEvent (key, keyChar, modifier);
+			CompletionWindowManager.PostProcessKeyEvent (KeyDescriptor.FromGtk (key, keyChar, modifier));
 			PopupCompletion ();
 		}
 
@@ -292,7 +292,7 @@ namespace MonoDevelop.Debugger
 			}
 
 			if (currentCompletionData != null) {
-				if ((keyHandled = CompletionWindowManager.PreProcessKeyEvent (key, keyChar, modifier)))
+				if ((keyHandled = CompletionWindowManager.PreProcessKeyEvent (KeyDescriptor.FromGtk (key, keyChar, modifier))))
 					return true;
 			}
 
@@ -331,6 +331,9 @@ namespace MonoDevelop.Debugger
 
 		int Position {
 			get { return Cursor.Offset - TokenBegin.Offset; }
+			set { 
+				throw new NotSupportedException ();
+			}
 		}
 
 		#region ICompletionWidget implementation
@@ -370,6 +373,15 @@ namespace MonoDevelop.Debugger
 			get {
 				return Position;
 			}
+			set {
+				Position = value;
+			}
+		}
+
+		double ICompletionWidget.ZoomLevel {
+			get {
+				return 1;
+			}
 		}
 
 		char ICompletionWidget.GetChar (int offset)
@@ -384,23 +396,20 @@ namespace MonoDevelop.Debugger
 
 		CodeCompletionContext ICompletionWidget.CreateCodeCompletionContext (int triggerOffset)
 		{
-			var c = new CodeCompletionContext ();
-			c.TriggerLine = 0;
-			c.TriggerOffset = triggerOffset;
-			c.TriggerLineOffset = c.TriggerOffset;
-			c.TriggerWordLength = currentCompletionData.ExpressionLength;
-
-			int height, lineY, x, y;
+			int x, y;
 			TextView.GdkWindow.GetOrigin (out x, out y);
-			TextView.GetLineYrange (Cursor, out lineY, out height);
+			TextView.GetLineYrange (Cursor, out var lineY, out var height);
 
 			var rect = GetIterLocation (Cursor);
 
-			c.TriggerYCoord = y + lineY + height - (int)Vadjustment.Value;
-			c.TriggerXCoord = x + rect.X;
-			c.TriggerTextHeight = height;
+			y += lineY + height - (int)Vadjustment.Value;
+			x += rect.X;
 
-			return c;
+			return new CodeCompletionContext (
+				x, y, height,
+				triggerOffset, 0, triggerOffset,
+				currentCompletionData.ExpressionLength
+			);
 		}
 
 		string ICompletionWidget.GetCompletionText (CodeCompletionContext ctx)
@@ -457,7 +466,7 @@ namespace MonoDevelop.Debugger
 
 		protected override void OnDestroyed ()
 		{
-			IdeApp.Preferences.CustomOutputPadFontChanged -= OnCustomOutputPadFontChanged;
+			IdeApp.Preferences.CustomOutputPadFont.Changed -= OnCustomOutputPadFontChanged;
 			CompletionWindowManager.WindowClosed -= OnCompletionWindowClosed;
 			CompletionWindowManager.HideWindow ();
 			TextView.FocusOutEvent -= TextView_FocusOutEvent;

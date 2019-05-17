@@ -39,21 +39,18 @@ namespace MonoDevelop.Debugger
 	{
 		Document disassemblyDoc;
 		DisassemblyView disassemblyView;
+		Document noSourceDoc;
+		NoSourceView noSourceView;
 		
 		protected override void Run ()
 		{
 			DebuggingService.CallStackChanged += OnStackChanged;
 			DebuggingService.CurrentFrameChanged += OnFrameChanged;
-			DebuggingService.ExecutionLocationChanged += OnExecLocationChanged;
 			DebuggingService.DisassemblyRequested += OnShowDisassembly;
 
 			IdeApp.CommandService.RegisterGlobalHandler (new GlobalRunMethodHandler ());
 		}
-		
-		void OnExecLocationChanged (object s, EventArgs a)
-		{
-		}
-		
+
 		void OnStackChanged (object s, EventArgs a)
 		{
 			if (disassemblyDoc == null || IdeApp.Workbench.ActiveDocument != disassemblyDoc) {
@@ -62,7 +59,7 @@ namespace MonoDevelop.Debugger
 			}
 		}
 		
-		void OnFrameChanged (object s, EventArgs a)
+		async void OnFrameChanged (object s, EventArgs a)
 		{
 			if (disassemblyDoc != null && DebuggingService.IsFeatureSupported (DebuggerFeatures.Disassembly))
 				disassemblyView.Update ();
@@ -75,37 +72,59 @@ namespace MonoDevelop.Debugger
 			int line = frame.SourceLocation.Line;
 			if (line != -1) {
 				if (!file.IsNullOrEmpty && System.IO.File.Exists (file)) {
-					if (IdeApp.Workbench.OpenDocument (file, null, line, 1, OpenDocumentOptions.Debugger) != null)
+					var doc = await IdeApp.Workbench.OpenDocument (file, null, line, 1, OpenDocumentOptions.Debugger);
+					if (doc != null)
 						return;
 				}
 				if (frame.SourceLocation.FileHash != null) {
 					var newFilePath = SourceCodeLookup.FindSourceFile (file, frame.SourceLocation.FileHash);
 					if (newFilePath != null) {
 						frame.UpdateSourceFile (newFilePath);
-						if (IdeApp.Workbench.OpenDocument (newFilePath, null, line, 1, OpenDocumentOptions.Debugger) != null)
+						var doc = await IdeApp.Workbench.OpenDocument (newFilePath, null, line, 1, OpenDocumentOptions.Debugger);
+						if (doc != null)
 							return;
 					}
 				}
 			}
 
+			bool disassemblyNotSupported = false;
 			// If we don't have an address space, we can't disassemble
 			if (string.IsNullOrEmpty (frame.AddressSpace))
-				return;
+				disassemblyNotSupported = true;
 
 			if (!DebuggingService.CurrentSessionSupportsFeature (DebuggerFeatures.Disassembly))
-				return;
+				disassemblyNotSupported = true;
 
-			if (disassemblyDoc == null)
-				OnShowDisassembly (null, null);
-			else
+			if (disassemblyNotSupported && disassemblyDoc != null) {
+				disassemblyDoc.Close ().Ignore ();
+				disassemblyDoc = null;
+				disassemblyView = null;
+			}
+
+			// If disassembly is open don't show NoSourceView
+			if (disassemblyDoc == null) {
+				if (noSourceDoc == null) {
+					noSourceView = new NoSourceView ();
+					noSourceView.Update (disassemblyNotSupported);
+					noSourceDoc = await IdeApp.Workbench.OpenDocument (noSourceView, true);
+					noSourceDoc.Closed += delegate {
+						noSourceDoc = null;
+						noSourceView = null;
+					};
+				} else {
+					noSourceView.Update (disassemblyNotSupported);
+					noSourceDoc.Select ();
+				}
+			} else {
 				disassemblyDoc.Select ();
+			}
 		}
 		
-		void OnShowDisassembly (object s, EventArgs a)
+		async void OnShowDisassembly (object s, EventArgs a)
 		{
 			if (disassemblyDoc == null) {
 				disassemblyView = new DisassemblyView ();
-				disassemblyDoc = IdeApp.Workbench.OpenDocument (disassemblyView, true);
+				disassemblyDoc = await IdeApp.Workbench.OpenDocument (disassemblyView, true);
 				disassemblyDoc.Closed += delegate {
 					disassemblyDoc = null;
 					disassemblyView = null;
@@ -126,8 +145,10 @@ namespace MonoDevelop.Debugger
 					if (!sf.IsExternalCode &&
 					    sf.SourceLocation.Line != -1 &&
 					    !string.IsNullOrEmpty (sf.SourceLocation.FileName) &&
-						//Uncomment condition below once logic for ProjectOnlyCode in runtime is fixed
-						(/*DebuggingService.CurrentSessionSupportsFeature (DebuggerFeatures.Disassembly) ||*/ System.IO.File.Exists (sf.SourceLocation.FileName))) {
+					    //Uncomment condition below once logic for ProjectOnlyCode in runtime is fixed
+					    (/*DebuggingService.CurrentSessionSupportsFeature (DebuggerFeatures.Disassembly) ||*/
+					        System.IO.File.Exists (sf.SourceLocation.FileName) ||
+					        SourceCodeLookup.FindSourceFile (sf.SourceLocation.FileName, sf.SourceLocation.FileHash).IsNotNull)) {
 						if (n != DebuggingService.CurrentFrameIndex)
 							DebuggingService.CurrentFrameIndex = n;
 						break;

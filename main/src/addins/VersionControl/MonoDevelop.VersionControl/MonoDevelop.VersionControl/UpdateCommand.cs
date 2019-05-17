@@ -1,3 +1,4 @@
+﻿using System;
 using System.Linq;
 using MonoDevelop.Core;
 
@@ -16,7 +17,7 @@ namespace MonoDevelop.VersionControl
 			return true;
 		}
 
-		private class UpdateWorker : Task {
+		private class UpdateWorker : VersionControlTask {
 			VersionControlItemList items;
 						
 			public UpdateWorker (VersionControlItemList items) {
@@ -27,13 +28,19 @@ namespace MonoDevelop.VersionControl
 			protected override string GetDescription() {
 				return GettextCatalog.GetString ("Updating...");
 			}
-			
+
 			protected override void Run ()
 			{
 				foreach (VersionControlItemList list in items.SplitByRepository ()) {
-					list[0].Repository.Update (list.Paths, true, Monitor);
+					try {
+						list [0].Repository.Update (list.Paths, true, Monitor);
+					} catch (Exception ex) {
+						LoggingService.LogError ("Update operation failed", ex);
+						Monitor.ReportError (ex.Message, null);
+						return;
+					}
 				}
-				Gtk.Application.Invoke (delegate {
+				Gtk.Application.Invoke ((o, args) => {
 					VersionControlService.NotifyFileStatusChanged (items);
 				});
 				Monitor.ReportSuccess (GettextCatalog.GetString ("Update operation completed."));

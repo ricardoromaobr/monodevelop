@@ -29,6 +29,8 @@ using MonoDevelop.Components.AutoTest;
 using System.Text.RegularExpressions;
 using MonoDevelop.Ide.Commands;
 using System.Linq;
+using MonoDevelop.Ide;
+using System.Collections;
 
 namespace UserInterfaceTests
 {
@@ -43,23 +45,49 @@ namespace UserInterfaceTests
 		public static string GetStatusMessage (int timeout = 20000, bool waitForNonEmpty = true)
 		{
 			if (Platform.IsMac) {
+				const string macStatusTextField = "MonoDevelop.Ide.IdeApp.Workbench.RootWindow.StatusBar.text";
 				if (waitForNonEmpty) {
 					Ide.WaitUntil (
-						() => Session.GetGlobalValue<string> ("MonoDevelop.Ide.IdeApp.Workbench.RootWindow.StatusBar.text") != string.Empty,
+						() => Session.GetGlobalValue<string> (macStatusTextField) != string.Empty,
 						timeout
 					);
 				}
-				return (string)Session.GetGlobalValue ("MonoDevelop.Ide.IdeApp.Workbench.RootWindow.StatusBar.text");
+				return (string)Session.GetGlobalValue (macStatusTextField);
 			}
 
 			if (waitForNonEmpty) {
+				const string gtkStatusMessageCount = "MonoDevelop.Ide.IdeApp.Workbench.RootWindow.StatusBar.messageQueue.Count";
 				Ide.WaitUntil (
-					() => Session.GetGlobalValue<int> ("MonoDevelop.Ide.IdeApp.Workbench.RootWindow.StatusBar.messageQueue.Count") == 0,
+					() => Session.GetGlobalValue<int> (gtkStatusMessageCount) == 0,
 					timeout,
-					timeoutMessage: ()=> "MessageQueue.Count="+Session.GetGlobalValue<int> ("MonoDevelop.Ide.IdeApp.Workbench.RootWindow.StatusBar.messageQueue.Count")
+					timeoutMessage: ()=> "MessageQueue.Count=" + Session.GetGlobalValue<int> (gtkStatusMessageCount)
 				);
 			}
 			return (string) Session.GetGlobalValue ("MonoDevelop.Ide.IdeApp.Workbench.RootWindow.StatusBar.renderArg.CurrentText");
+		}
+
+		public static void WaitForStatusIcon(int timeout = 20000, string text = "", bool waitForExisting = true)
+		{
+			if (Platform.IsMac)
+			{
+				Ide.WaitUntil(
+					() => {
+						var icons = Session.GetGlobalValue<string[]>("MonoDevelop.Ide.IdeApp.Workbench.RootWindow.StatusBar.StatusIcons");
+						bool found = false;
+						foreach (string icon in icons) {
+							if (icon == text) {
+								found = true;
+								break;
+							}
+						}
+
+						return found ^ waitForExisting;
+					},
+					timeout
+				);
+			}
+
+			throw new NotImplementedException ("Gtk backend not implemented");
 		}
 
 		public static bool IsBuildSuccessful (int timeoutInSecs)
@@ -89,7 +117,7 @@ namespace UserInterfaceTests
 			return isBuildSuccessful;
 		}
 
-		public static bool Run (int timeoutSeconds = 20, int pollStepSecs = 5)
+		public static bool Run (int timeoutSeconds = 20, int pollStepSecs = 1)
 		{
 			Session.ExecuteCommand (ProjectCommands.Run);
 			try {
@@ -104,8 +132,7 @@ namespace UserInterfaceTests
 
 		public static void OpenWorkspace (string solutionPath, UITestBase testContext = null)
 		{
-			if (testContext != null)
-				testContext.ReproStep (string.Format ("Open solution path '{0}'", solutionPath));
+			testContext?.ReproStep (string.Format ("Open solution path '{0}'", solutionPath));
 			Action<string> takeScreenshot = GetScreenshotAction (testContext);
 			Session.GlobalInvoke ("MonoDevelop.Ide.IdeApp.Workspace.OpenWorkspaceItem", new FilePath (solutionPath), true);
 			Ide.WaitForIdeIdle ();
@@ -114,11 +141,19 @@ namespace UserInterfaceTests
 
 		public static void CloseWorkspace (UITestBase testContext = null)
 		{
-			if (testContext != null)
-				testContext.ReproStep ("Close current workspace");
+			testContext?.ReproStep ("Close current workspace");
 			Action<string> takeScreenshot = GetScreenshotAction (testContext);
 			takeScreenshot ("About-To-Close-Workspace");
 			Session.ExecuteCommand (FileCommands.CloseWorkspace);
+			takeScreenshot ("Closed-Workspace");
+		}
+
+		public static void CloseDocument (UITestBase testContext = null)
+		{
+			testContext?.ReproStep ("Close current workspace");
+			Action<string> takeScreenshot = GetScreenshotAction (testContext);
+			takeScreenshot ("About-To-Close-Workspace");
+			Session.ExecuteCommand (FileCommands.CloseFile);
 			takeScreenshot ("Closed-Workspace");
 		}
 

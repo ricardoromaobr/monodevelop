@@ -53,6 +53,9 @@ usage ()
 	echo "--enable-release"
 	echo "  Builds md in release mode"
 	echo ""
+	echo "--enable-mac32"
+	echo "  Build for i386 on OS X"
+	echo ""
 	echo "--profile=PROFILE"
 	echo ""
 	echo "  Configure the build system using the provided profile."
@@ -61,7 +64,7 @@ usage ()
 	echo "  add a profile, simply create a file in the 'profiles' directory."
 	echo "  The 'default' profile is used when none is specified."
 	echo ""
-	echo "  Profiles available:" $profiles 
+	echo "  Profiles available:" $profiles
 	echo ""
 }
 
@@ -94,7 +97,7 @@ select_packages ()
 	done
 	pcount=$n
 	while [[ 1 ]]
-	do 
+	do
 		echo Select the packages to include in the build for the profile \'$profile\':
 		echo
 		n=1
@@ -140,7 +143,7 @@ handle_config_error ()
 {
 	if test `uname` = "Darwin"; then
 		echo ""
-		echo "Have you followed http://monodevelop.com/Developers/Mac_Support/Building_MonoDevelop_on_OS_X ?"
+		echo "Have you followed http://www.monodevelop.com/developers/building-monodevelop/#macosx ?"
 		echo ""
 	fi
 	exit 1
@@ -157,6 +160,12 @@ configure_packages ()
 			enable_tests=--enable-tests
 		else
 			enable_tests=" "
+		fi
+
+		if test `uname` != "Darwin" || test xno == x$x64; then
+			enable_x64=--with-macarch=i386
+		else
+			enable_x64=--with-macarch=x86_64
 		fi
 
 		prefixarg="--prefix=$prefix"
@@ -182,13 +191,16 @@ configure_packages ()
 		echo
 		echo "Configuration options: $ops"
 		if test -a $path/autogen.sh; then
-			sct="./autogen.sh $enable_tests"
+			sct="./autogen.sh $enable_tests $enable_x64"
 		elif test -a $path/configure; then
 			sct=./configure
 		elif test -a $path/configure.sh; then
 			sct=./configure.sh
 		else
-			echo Configuration script not found in directory: $p
+			echo -en '\033[0;31m'
+			echo Configuration script not found in directory: $path
+			echo Try running $ git submodule update --init --recursive
+			echo -en '\033[0m'
 			exit 1
 		fi
 		pushd $path > /dev/null
@@ -217,7 +229,7 @@ create_local_config ()
 		pcfile=`echo $f | sed s,.*/,, | sed s/\.in$//`
 		sed -e s,libdir=.*,libdir=$builddir, -e s/@VERSION@/$ver/g $f> local-config/$pcfile
 	done
-	
+
 	# Generate the .addins file for the package
 	addins=local-config/`echo $path | sed s,/,_,g`.addins
 	echo "<Addins>" > $addins
@@ -234,6 +246,9 @@ while test x$1 != x; do
 			;;
 		--enable-release)
 			release=yes
+			;;
+		--enable-mac32)
+			x64=no
 			;;
 		--prefix=*)
 			prefix=`echo $1 | sed 's/--prefix=//'`
@@ -265,12 +280,6 @@ while test x$1 != x; do
 	esac
 	shift
 done
-
-# make the build & run use libraries already installed in $PREFIX
-if [ -d "$prefix" ]; then
-	export MONO_GAC_PREFIX=$prefix:$MONO_GAC_PREFIX
-	export PKG_CONFIG_PATH=$prefix/lib/pkgconfig:$prefix/share/pkgconfig:$PKG_CONFIG_PATH
-fi
 
 if test `uname` = "Darwin" && test "x$profile" = "xdefault"; then
 	profile="mac"

@@ -24,40 +24,54 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-using System.IO;
-using MonoDevelop.AspNet.Projects;
+using System.Threading;
+using System.Threading.Tasks;
 using MonoDevelop.AspNet.WebForms;
-using MonoDevelop.CSharpBinding;
-using MonoDevelop.CSharpBinding.Tests;
+using MonoDevelop.Core.Text;
 using MonoDevelop.Ide.CodeCompletion;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Ide.TypeSystem;
 using MonoDevelop.Projects;
+using MonoDevelop.Ide.Gui.Documents;
+using MonoDevelop.Ide.Editor;
 
 namespace MonoDevelop.AspNet.Tests.WebForms
 {
 	//largely copied from RazorCompletionTesting
 	static class WebFormsTesting
 	{
-		public static CompletionDataList CreateProvider (string text, string extension, bool isCtrlSpace = false)
+		public static async Task<CompletionDataList> CreateProvider (string text, string extension, bool isCtrlSpace = false)
 		{
-			string editorText;
-			TestViewContent sev;
-
-			var textEditorCompletion = CreateEditor (text, extension, out editorText, out sev);
+			var result = await CreateEditor (text, extension);
+			var textEditorCompletion = result.Extension;
+			string editorText = result.EditorText;
+			TestViewContent sev = result.ViewContent;
 			int cursorPosition = text.IndexOf ('$');
 
-			int triggerWordLength = 1;
 			var ctx = textEditorCompletion.GetCodeCompletionContext (sev);
 
 			if (isCtrlSpace)
-				return textEditorCompletion.CodeCompletionCommand (ctx) as CompletionDataList;
-			else
-				return textEditorCompletion.HandleCodeCompletion (ctx, editorText[cursorPosition - 1], ref triggerWordLength) as CompletionDataList;
+				return await textEditorCompletion.HandleCodeCompletionAsync (ctx, CompletionTriggerInfo.CodeCompletionCommand) as CompletionDataList;
+			else {
+				var task = textEditorCompletion.HandleCodeCompletionAsync (ctx, new CompletionTriggerInfo (CompletionTriggerReason.CharTyped, editorText [cursorPosition - 1]));
+				if (task != null) {
+					return await task as CompletionDataList;
+				}
+				return null;
+			}
 		}
 
-		static WebFormsTestingEditorExtension CreateEditor (string text, string extension, out string editorText, out TestViewContent sev)
+		struct CreateEditorResult
 		{
+			public WebFormsTestingEditorExtension Extension;
+			public string EditorText;
+			public TestViewContent ViewContent;
+		}
+
+		static async Task<CreateEditorResult> CreateEditor (string text, string extension)
+		{
+			string editorText;
+			TestViewContent sev;
 			string parsedText;
 			int cursorPosition = text.IndexOf ('$');
 			int endPos = text.IndexOf ('$', cursorPosition + 1);
@@ -69,40 +83,44 @@ namespace MonoDevelop.AspNet.Tests.WebForms
 				cursorPosition = endPos - 1;
 			}
 
-			var project = new AspNetAppProject ("C#");
-			project.References.Add (new ProjectReference (ReferenceType.Package, "System"));
-			project.References.Add (new ProjectReference (ReferenceType.Package, "System.Web"));
+			var project = Services.ProjectService.CreateDotNetProject ("C#");
+			project.References.Add (ProjectReference.CreateAssemblyReference ("System"));
+			project.References.Add (ProjectReference.CreateAssemblyReference ("System.Web"));
 			project.FileName = UnitTests.TestBase.GetTempFile (".csproj");
 			string file = UnitTests.TestBase.GetTempFile (extension);
 			project.AddFile (file);
 
-			var pcw = TypeSystemService.LoadProject (project);
-			TypeSystemService.ForceUpdate (pcw);
-			pcw.ReconnectAssemblyReferences ();
-
 			sev = new TestViewContent ();
-			sev.Project = project;
-			sev.ContentName = file;
+			await sev.Initialize (new FileDescriptor (file, null, project), null);
+
 			sev.Text = editorText;
 			sev.CursorPosition = cursorPosition;
 
-			var tww = new TestWorkbenchWindow ();
-			tww.ViewContent = sev;
-
-			var doc = new TestDocument (tww);
-			doc.Editor.Document.FileName = sev.ContentName;
 			var parser = new WebFormsParser ();
-			var parsedDoc = (WebFormsParsedDocument) parser.Parse (false, sev.ContentName, new StringReader (parsedText), project);
-			doc.HiddenParsedDocument = parsedDoc;
+			var options = new ParseOptions {
+				Project = project,
+				FileName = file,
+				Content = new StringTextSource (parsedText)
+			};
+			sev.Editor.FileName = sev.FilePath;
 
-			return new WebFormsTestingEditorExtension (doc);
+			var parsedDoc = await parser.Parse (options, default(CancellationToken)) as WebFormsParsedDocument;
+
+			var documentContext = sev.GetContent<RoslynDocumentContext> ();
+			documentContext.SetParsedDocument (parsedDoc);
+
+			return new CreateEditorResult {
+				Extension = new WebFormsTestingEditorExtension (sev.Editor, documentContext),
+				EditorText = editorText,
+				ViewContent = sev
+			};
 		}
 
 		public class WebFormsTestingEditorExtension : WebFormsEditorExtension
 		{
-			public WebFormsTestingEditorExtension (Document doc)
+			public WebFormsTestingEditorExtension (TextEditor editor, DocumentContext documentContext)
 			{
-				Initialize (doc);
+				Initialize (editor, documentContext);
 			}
 
 			public CodeCompletionContext GetCodeCompletionContext (TestViewContent sev)

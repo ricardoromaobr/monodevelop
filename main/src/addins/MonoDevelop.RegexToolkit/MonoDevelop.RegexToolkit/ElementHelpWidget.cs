@@ -1,4 +1,4 @@
-// 
+﻿// 
 // ElementHelpWidget.cs
 //  
 // Author:
@@ -32,17 +32,17 @@ using MonoDevelop.Core;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Components;
+using MonoDevelop.Ide.Gui.Documents;
 
 namespace MonoDevelop.RegexToolkit
 {
 	[System.ComponentModel.ToolboxItem(true)]
-	partial class ElementHelpWidget : Gtk.Bin
+	internal partial class ElementHelpWidget : Gtk.Bin
 	{
 		TreeStore elementsStore;
-//		IWorkbenchWindow workbenchWindow;
-//		RegexToolkitWidget regexWidget;
+		DocumentViewContent regexView;
 
-		public ElementHelpWidget (IWorkbenchWindow workbenchWindow, RegexToolkitWidget regexWidget)
+		public ElementHelpWidget (DocumentViewContent regexView, RegexToolkitWidget regexWidget)
 		{
 //			this.workbenchWindow = workbenchWindow;
 //			this.regexWidget = regexWidget;
@@ -80,7 +80,7 @@ namespace MonoDevelop.RegexToolkit
 					string text = elementsStore.GetValue (iter, 3) as string;
 					if (!System.String.IsNullOrEmpty (text)) {
 						regexWidget.InsertText (text);
-						workbenchWindow.SwitchView (0);
+						regexView.SetActive ();
 					}
 				}
 			};
@@ -91,7 +91,7 @@ namespace MonoDevelop.RegexToolkit
 			Show ();
 		}
 		
-		void ElementDescriptionFunc (TreeViewColumn column, CellRenderer cell, TreeModel model, TreeIter iter)
+		static void ElementDescriptionFunc (TreeViewColumn column, CellRenderer cell, TreeModel model, TreeIter iter)
 		{
 			string str = (string)model.GetValue (iter, 2);
 			if (string.IsNullOrEmpty (str)) {
@@ -146,10 +146,6 @@ namespace MonoDevelop.RegexToolkit
 		protected override void OnDestroyed ()
 		{
 			base.OnDestroyed ();
-			if (elementsStore != null) {
-				elementsStore.Dispose ();
-				elementsStore = null;
-			}
 			
 			HideTooltipWindow ();
 		}
@@ -210,7 +206,7 @@ namespace MonoDevelop.RegexToolkit
 //			int w = tooltipWindow.Child.SizeRequest ().Width;
 //			int h = tooltipWindow.Child.SizeRequest ().Height;
 //			
-//			Gdk.Rectangle geometry = DesktopService.GetUsableMonitorGeometry (Screen, Screen.GetMonitorAtWindow (this.GdkWindow));
+//			Gdk.Rectangle geometry = IdeServices.DesktopService.GetUsableMonitorGeometry (Screen, Screen.GetMonitorAtWindow (this.GdkWindow));
 //			if (oy + altY > geometry.Bottom) {
 //				tooltipWindow.Move (ox, altY - h);
 //			} else {

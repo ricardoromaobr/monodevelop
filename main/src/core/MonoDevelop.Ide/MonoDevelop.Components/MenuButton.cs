@@ -29,6 +29,8 @@
 using System;
 using Gtk;
 
+using MonoDevelop.Components.AtkCocoaHelper;
+
 namespace MonoDevelop.Components
 {
 	
@@ -40,22 +42,27 @@ namespace MonoDevelop.Components
 		MenuCreator creator;
 		ContextMenuCreator contextMenuCreator;
 		Label label;
-		Image image;
+		ImageView image;
 		Arrow arrow;
 		bool isOpen;
 		
 		public MenuButton ()
 			: base ()
 		{
+			Accessible.SetRole (AtkCocoa.Roles.AXMenuButton);
+
 			HBox box = new HBox ();
 			box.Spacing = 6;
 			Add (box);
 			
-			image = new Image ();
+			image = new ImageView ();
+			image.Accessible.Role = Atk.Role.Filler;
 			image.NoShowAll = true;
 			box.PackStart (image, false, false, 0);
 			label = new Label ();
 			label.NoShowAll = true;
+			label.Accessible.SetShouldIgnore (true);
+
 			box.PackStart (label, false, false, 0);
 			ArrowType = Gtk.ArrowType.Down;
 			base.Label = null;
@@ -103,8 +110,9 @@ namespace MonoDevelop.Components
 
 				Gdk.Rectangle rect = this.Allocation;
 
+				this.GrabFocus ();
 				// Offset the menu by the height of the rect
-				ContextMenuExtensionsGtk.ShowContextMenu (this, 0, rect.Height, menu, () => MenuClosed (oldRelief));
+				menu.Show (this, 0, rect.Height, () => MenuClosed (oldRelief)); 
 				return;
 			}
 
@@ -169,10 +177,11 @@ namespace MonoDevelop.Components
 				} else {
 					if (arrow == null ) {
 						arrow = new Arrow (Gtk.ArrowType.Down, ShadowType.Out);
+						arrow.Accessible.Role = Atk.Role.Filler;
 						arrow.Show ();
 						((HBox)label.Parent).PackEnd (arrow, false, false, 0);
 					}
-					arrow.ArrowType = value?? Gtk.ArrowType.Down;
+					arrow.ArrowType = value.Value;
 				}
 			}
 		}
@@ -190,6 +199,8 @@ namespace MonoDevelop.Components
 			set {
 				label.Text = value;
 				label.Visible = !string.IsNullOrEmpty (value);
+
+				Accessible.Name = value;
 			}
 		}
 		
@@ -200,7 +211,7 @@ namespace MonoDevelop.Components
 		
 		public string StockImage {
 			set {
-				image.Pixbuf = RenderIcon (value, IconSize.Button, null);
+				image.SetIcon (value, IconSize.Button);
 				image.Show ();
 			}
 		}

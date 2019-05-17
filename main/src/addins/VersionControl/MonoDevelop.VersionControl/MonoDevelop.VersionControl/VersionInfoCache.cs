@@ -23,16 +23,19 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using MonoDevelop.Core;
 using System.Collections.Generic;
 using System.Linq;
+using System;
+using System.Collections.Concurrent;
 
 namespace MonoDevelop.VersionControl
 {
-	class VersionInfoCache
+	class VersionInfoCache : IDisposable
 	{
-		Dictionary<FilePath,VersionInfo> fileStatus = new Dictionary<FilePath, VersionInfo> ();
-		Dictionary<FilePath,DirectoryStatus> directoryStatus = new Dictionary<FilePath, DirectoryStatus> ();
+		readonly ConcurrentDictionary<FilePath, VersionInfo> fileStatus = new ConcurrentDictionary<FilePath, VersionInfo> ();
+		readonly ConcurrentDictionary<FilePath, DirectoryStatus> directoryStatus = new ConcurrentDictionary<FilePath, DirectoryStatus> ();
 		Repository repo;
 
 		public VersionInfoCache (Repository repo)
@@ -42,47 +45,55 @@ namespace MonoDevelop.VersionControl
 
 		public void ClearCachedVersionInfo (FilePath rootPath)
 		{
+			FileUpdateEventArgs args = null;
 			var canonicalPath = rootPath.CanonicalPath;
-			lock (fileStatus) {
-				foreach (var p in fileStatus.Where (e => e.Key.IsChildPathOf (rootPath) || e.Key == canonicalPath))
-					p.Value.RequiresRefresh = true;
+
+			foreach (var p in fileStatus.Where (e => e.Key.IsChildPathOf (rootPath) || e.Key == canonicalPath)) {
+				p.Value.RequiresRefresh = true;
+
+				var a = new FileUpdateEventArgs (repo, p.Value.LocalPath, p.Value.IsDirectory);
+				if (args == null)
+					args = a;
+				else
+					args.MergeWith (a);
 			}
-			lock (directoryStatus) {
-				foreach (var p in directoryStatus.Where (e => e.Key.IsChildPathOf (rootPath) || e.Key == canonicalPath))
-					p.Value.RequiresRefresh = true;
+
+			foreach (var p in directoryStatus.Where (e => e.Key.IsChildPathOf (rootPath) || e.Key == canonicalPath)) {
+				p.Value.RequiresRefresh = true;
+			}
+
+			if (args != null) {
+				//	Console.WriteLine ("Notifying Status " + string.Join (", ", args.Select (p => p.FilePath.FullPath)));
+				VersionControlService.NotifyFileStatusChanged (args);
 			}
 		}
 
 		public VersionInfo GetStatus (FilePath localPath)
 		{
-			lock (fileStatus) {
-				VersionInfo vi;
-				fileStatus.TryGetValue (localPath, out vi);
-				return vi;
-			}
+			fileStatus.TryGetValue (localPath, out var vi);
+
+			return vi;
 		}
 
 		public DirectoryStatus GetDirectoryStatus (FilePath localPath)
 		{
-			lock (directoryStatus) {
-				DirectoryStatus vis;
-				if (directoryStatus.TryGetValue (localPath.CanonicalPath, out vis))
-					return vis;
-				return null;
-			}
+			if (directoryStatus.TryGetValue (localPath.CanonicalPath, out var vis))
+				return vis;
+			return null;
 		}
 
 		public void SetStatus (VersionInfo versionInfo, bool notify = true)
 		{
-			lock (fileStatus) {
-				VersionInfo vi;
-				if (fileStatus.TryGetValue (versionInfo.LocalPath, out vi) && vi.Equals (versionInfo)) {
-					vi.RequiresRefresh = false;
-					return;
-				}
+			if (!versionInfo.IsInitialized)
 				versionInfo.Init (repo);
-				fileStatus [versionInfo.LocalPath] = versionInfo;
+
+			if (fileStatus.TryGetValue (versionInfo.LocalPath, out var vi) && vi.Equals (versionInfo)) {
+				vi.RequiresRefresh = false;
+				return;
 			}
+
+			fileStatus [versionInfo.LocalPath] = versionInfo;
+
 			if (notify)
 				VersionControlService.NotifyFileStatusChanged (new FileUpdateEventArgs (repo, versionInfo.LocalPath, versionInfo.IsDirectory));
 		}
@@ -90,58 +101,68 @@ namespace MonoDevelop.VersionControl
 		public void SetStatus (IEnumerable<VersionInfo> versionInfos)
 		{
 			FileUpdateEventArgs args = null;
-			lock (fileStatus) {
-				foreach (var versionInfo in versionInfos) {
-					VersionInfo vi;
-					if (fileStatus.TryGetValue (versionInfo.LocalPath, out vi) && vi.Equals (versionInfo)) {
-						vi.RequiresRefresh = false;
-						continue;
-					}
+
+			foreach (var versionInfo in versionInfos) {
+				if (!versionInfo.IsInitialized)
 					versionInfo.Init (repo);
-					fileStatus [versionInfo.LocalPath] = versionInfo;
-					var a = new FileUpdateEventArgs (repo, versionInfo.LocalPath, versionInfo.IsDirectory);
-					if (args == null)
-						args = a;
-					else
-						args.MergeWith (a);
+
+				if (fileStatus.TryGetValue (versionInfo.LocalPath, out var vi) && vi.Equals (versionInfo)) {
+					vi.RequiresRefresh = false;
+					continue;
 				}
+
+				fileStatus [versionInfo.LocalPath] = versionInfo;
+
+				var a = new FileUpdateEventArgs (repo, versionInfo.LocalPath, versionInfo.IsDirectory);
+				if (args == null)
+					args = a;
+				else
+					args.MergeWith (a);
 			}
+
 			if (args != null) {
-			//	Console.WriteLine ("Notifying Status " + string.Join (", ", args.Select (p => p.FilePath.FullPath)));
+				//	Console.WriteLine ("Notifying Status " + string.Join (", ", args.Select (p => p.FilePath.FullPath)));
 				VersionControlService.NotifyFileStatusChanged (args);
 			}
 		}
 
-		public void SetDirectoryStatus (FilePath localDirectory, VersionInfo[] versionInfos, bool hasRemoteStatus)
+		public void SetDirectoryStatus (FilePath localDirectory, VersionInfo [] versionInfos, bool hasRemoteStatus)
 		{
-			lock (directoryStatus) {
-				DirectoryStatus vis;
-				if (directoryStatus.TryGetValue (localDirectory.CanonicalPath, out vis)) {
-					if (versionInfos.Length == vis.FileInfo.Length && (hasRemoteStatus == vis.HasRemoteStatus)) {
-						bool allEqual = true;
-						for (int n=0; n<versionInfos.Length; n++) {
-							if (!versionInfos[n].Equals (vis.FileInfo[n])) {
-								allEqual = false;
-								break;
-							}
-						}
-						if (allEqual) {
-							vis.RequiresRefresh = false;
-							return;
+			if (directoryStatus.TryGetValue (localDirectory.CanonicalPath, out var vis)) {
+				if (versionInfos.Length == vis.FileInfo.Length && (hasRemoteStatus == vis.HasRemoteStatus)) {
+					bool allEqual = true;
+					for (int n = 0; n < versionInfos.Length; n++) {
+						if (!versionInfos [n].Equals (vis.FileInfo [n])) {
+							allEqual = false;
+							break;
 						}
 					}
+					if (allEqual) {
+						vis.RequiresRefresh = false;
+						return;
+					}
 				}
-				directoryStatus [localDirectory.CanonicalPath] = new DirectoryStatus { FileInfo = versionInfos, HasRemoteStatus = hasRemoteStatus };
-				SetStatus (versionInfos);
 			}
+			directoryStatus [localDirectory.CanonicalPath] = new DirectoryStatus { FileInfo = versionInfos, HasRemoteStatus = hasRemoteStatus };
+			SetStatus (versionInfos);
+		}
+
+		public void Dispose ()
+		{
+			if (fileStatus != null) {
+				fileStatus.Clear ();
+			}
+			if (directoryStatus != null) {
+				directoryStatus.Clear ();
+			}
+			repo = null;
 		}
 	}
 
 	class DirectoryStatus
 	{
-		public VersionInfo[] FileInfo { get; set; }
+		public VersionInfo [] FileInfo { get; set; }
 		public bool HasRemoteStatus { get; set; }
 		public bool RequiresRefresh { get; set; }
 	}
 }
-

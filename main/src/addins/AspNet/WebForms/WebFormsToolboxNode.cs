@@ -30,7 +30,6 @@ using System;
 using System.ComponentModel;
 using System.Drawing.Design;
 
-using ICSharpCode.NRefactory.TypeSystem;
 using MonoDevelop.Core;
 using MonoDevelop.Core.Assemblies;
 using MonoDevelop.Core.Serialization;
@@ -90,9 +89,9 @@ namespace MonoDevelop.AspNet.WebForms
 			return code;
 		}
 		
-		void RegisterReference (MonoDevelop.Projects.Project project)
+		void RegisterReference (MonoDevelop.Projects.DotNetProject project)
 		{
-			var dnp = (MonoDevelop.Projects.DotNetProject) project;
+			var dnp = project;
 			var pr = base.Type.GetProjectReference ();
 			
 			//add the reference if it doesn't match an existing one
@@ -122,15 +121,15 @@ namespace MonoDevelop.AspNet.WebForms
 			
 			//register the assembly and look up the class
 			//FIXME: only do this on the insert, not the preview - or remove it afterwards
-			RegisterReference (document.Project);
+			RegisterReference ((MonoDevelop.Projects.DotNetProject) document.Owner);
 			
-			var database = document.Compilation;
+			var database = document.GetCompilationAsync ().Result;
 			
-			var cls = database.FindType (Type.Load ());
+			var cls = database.GetTypeByMetadataName (Type.Load ().FullName);
 			if (cls == null)
 				return tag;
 
-			var ed = document.GetContent<WebFormsEditorExtension> ();
+			var ed = document.GetContent<WebFormsEditorExtension> (true);
 			if (ed == null)
 				return tag;
 
@@ -157,7 +156,7 @@ namespace MonoDevelop.AspNet.WebForms
 		
 		public bool IsCompatibleWith (MonoDevelop.Ide.Gui.Document document)
 		{
-			switch (AspNetAppProject.DetermineWebSubtype (document.FileName)) {
+			switch (AspNetAppProjectFlavor.DetermineWebSubtype (document.FileName)) {
 			case WebSubtype.WebForm:
 			case WebSubtype.MasterPage:
 			case WebSubtype.WebControl:
@@ -167,7 +166,7 @@ namespace MonoDevelop.AspNet.WebForms
 			}
 			
 			var clrVersion = ClrVersion.Net_2_0;
-			var aspProj = document.Project as AspNetAppProject;
+			var aspProj = document.Owner as DotNetProject;
 			if (aspProj != null && aspProj.TargetFramework.ClrVersion != ClrVersion.Default)
 				clrVersion = aspProj.TargetFramework.ClrVersion;
 			

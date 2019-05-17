@@ -98,6 +98,11 @@ namespace MonoDevelop.Components.AutoTest.Results
 			return false;
 		}
 
+		public override bool Click (double x, double y)
+		{
+			return false;
+		}
+
 		public override bool TypeKey (char key, string state = "")
 		{
 			return false;
@@ -121,6 +126,17 @@ namespace MonoDevelop.Components.AutoTest.Results
 		public override void Flash ()
 		{
 			
+		}
+
+		public override void SetProperty (string propertyName, object newValue)
+		{
+			SetProperty (value, propertyName, newValue);
+		}
+
+		protected override void Dispose (bool disposing)
+		{
+			value = null;
+			base.Dispose (disposing);
 		}
 	}
 }

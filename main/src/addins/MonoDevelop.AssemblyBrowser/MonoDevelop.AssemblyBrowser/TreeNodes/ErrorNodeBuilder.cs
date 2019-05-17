@@ -29,8 +29,6 @@
 using System;
 using System.Collections.Generic;
 
-using Mono.Cecil;
-
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Ide.Gui.Pads;
 using MonoDevelop.Ide.Gui.Components;
@@ -51,7 +49,7 @@ namespace MonoDevelop.AssemblyBrowser
 		public override void BuildNode (ITreeBuilder treeBuilder, object dataObject, NodeInfo nodeInfo)
 		{
 			Error error = (Error)dataObject;
-			nodeInfo.Label = error.Message;
+			nodeInfo.Label = MonoDevelop.Ide.TypeSystem.Ambience.EscapeText (error.Message);
 			nodeInfo.Icon = Context.GetIcon (Stock.Error);
 		}
 	}

@@ -26,6 +26,7 @@
 
 using System;
 using System.IO;
+using System.Threading.Tasks;
 
 namespace Mono.MHex.Data
 {
@@ -34,10 +35,7 @@ namespace Mono.MHex.Data
 		long Length {
 			get;
 		}
-		byte[] Bytes {
-			get;
-		}
-		
+
 		byte[] GetBytes (long offset, int count);
 	}
 	
@@ -81,6 +79,16 @@ namespace Mono.MHex.Data
 			return new ArrayBuffer (buf);
 		}
 		
+		public static async Task<IBuffer> LoadAsync (Stream stream)
+		{
+			int count = (int) stream.Length;
+			byte[] buf = new byte[count];
+
+			await stream.ReadAsync (buf, 0, count);
+
+			return new ArrayBuffer (buf);
+		}
+
 		public static IBuffer Load (string fileName)
 		{
 			using (Stream stream = File.OpenRead (fileName)) {

@@ -28,7 +28,6 @@
 using System;
 using System.Linq;
 using MonoDevelop.Core;
-using Mono.TextEditor;
 using System.Collections.Generic;
 using MonoDevelop.Projects.Text;
 
@@ -37,11 +36,13 @@ namespace MonoDevelop.Ide.TextEditing
 
 	public abstract class FileExtension: IDisposable
 	{
+		internal TextEditorService TextEditorService { get; set; }
+
 		public FilePath File { get; set; }
 
 		public void Refresh ()
 		{
-			TextEditorService.Refresh (this);
+			TextEditorService?.Refresh (this);
 		}
 
 		public void Dispose ()
@@ -52,7 +53,7 @@ namespace MonoDevelop.Ide.TextEditing
 		protected virtual void Dispose (bool disposing)
 		{
 			if (disposing)
-				TextEditorService.UnregisterExtension (this);
+				TextEditorService?.UnregisterExtension (this);
 		}
 	}
 	

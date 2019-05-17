@@ -25,6 +25,8 @@
 // THE SOFTWARE.
 
 using System;
+using System.Collections.Generic;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.Components
 {
@@ -50,6 +52,27 @@ namespace MonoDevelop.Components
 
 	public class ContextMenuItem
 	{
+		static HashSet<string> LocaleWithSpecialMnemonics = new HashSet<string> {
+			"ja",
+			"ko",
+			"zh_CN",
+			"zh_TW",
+		};
+
+		public static bool ContainsSpecialMnemonics => LocaleWithSpecialMnemonics.Contains (GettextCatalog.UILocale);
+		public static string SanitizeMnemonics (string label)
+		{
+			// Strip out mnemonics for supported non-latin languages - i.e. zh_CN has "(_A)"
+			if (ContainsSpecialMnemonics) {
+				int index = label.LastIndexOf ('(');
+				if (label.Length >= index + 3 && label [index + 1] == '_' && label [index + 3] == ')')
+					return label.Remove (index, 4);
+				return label;
+			}
+
+			return label.Replace ("_", "");
+		}
+
 		ContextMenu subMenu;
 		Xwt.Drawing.Image image;
 
@@ -64,7 +87,11 @@ namespace MonoDevelop.Components
 
 		public ContextMenuItem (string label) : this()
 		{
+			#if MAC
+			Label = SanitizeMnemonics (label);
+			#else
 			Label = label;
+			#endif
 		}
 
 		public bool IsSeparator {
@@ -87,6 +114,21 @@ namespace MonoDevelop.Components
 		public bool Sensitive { get; set; }
 
 		public bool Visible { get; set; }
+
+		public event EventHandler<Xwt.Rectangle> Selected;
+
+		internal void FireSelectedEvent (Xwt.Rectangle menuArea)
+		{
+			Selected?.Invoke (this, menuArea);
+		}
+
+		public event EventHandler Deselected;
+
+		internal void FireDeselectedEvent ()
+		{
+			Deselected?.Invoke (this, EventArgs.Empty);
+		}
+
 
 		public Xwt.Drawing.Image Image {
 			get { return image; }
@@ -120,7 +162,11 @@ namespace MonoDevelop.Components
 
 		internal void Click ()
 		{
-			DoClick ();
+			try {
+				DoClick ();
+			} catch (Exception ex) {
+				LoggingService.LogError ("Exception in context menu", ex);
+			}
 		}
 
 		protected virtual void DoClick ()
@@ -133,5 +179,6 @@ namespace MonoDevelop.Components
 			if (Clicked != null)
 				Clicked (this, e);
 		}
-	}
+
+}
 }

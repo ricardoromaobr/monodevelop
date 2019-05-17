@@ -1,4 +1,4 @@
-// ProjectFileDescriptor.cs
+﻿// ProjectFileDescriptor.cs
 //
 //Author:
 //  Lluis Sanchez Gual
@@ -38,27 +38,37 @@ namespace MonoDevelop.DesignerSupport
 	class ProjectFileDescriptor: CustomDescriptor, IDisposable
 	{
 		ProjectFile file;
-		
+		Project project;
+
 		public ProjectFileDescriptor (ProjectFile file)
 		{
 			this.file = file;
-			file.Project.FilePropertyChangedInProject += OnFilePropertyChangedInProject;
+			project = file.Project;
+			if (project != null) {
+				project.FilePropertyChangedInProject += OnFilePropertyChangedInProject;
+			}
 		}
 
 		void OnFilePropertyChangedInProject (object sender, ProjectFileEventArgs args)
 		{
-			var pad = IdeApp.Workbench.GetPad <PropertyPad> ();
+			var pad = IdeApp.Workbench.GetPad <IPropertyPad> ();
 			if (pad == null)
 				return;
 
-			var grid = ((PropertyPad)pad.Content).PropertyGrid;
+			var propertyPad = (IPropertyPad)pad.Content;
+			if (propertyPad.IsGridEditing)
+				return;
+
 			if (args.Any (arg => arg.ProjectFile == file))
-				grid.Refresh ();
+				propertyPad.PopulateGrid (saveEditSession: false);
 		}
 
 		void IDisposable.Dispose ()
 		{
-			file.Project.FilePropertyChangedInProject -= OnFilePropertyChangedInProject;
+			if (project != null) {
+				project.FilePropertyChangedInProject -= OnFilePropertyChangedInProject;
+				project = null;
+			}
 		}
 		
 		[LocalizedCategory ("Misc")]
@@ -80,8 +90,8 @@ namespace MonoDevelop.DesignerSupport
 		[LocalizedDescription ("Type of the file.")]
 		public string FileType {
 			get {
-				string type = DesktopService.GetMimeTypeForUri (file.Name);
-				return DesktopService.GetMimeTypeDescription (type); 
+				string type = IdeServices.DesktopService.GetMimeTypeForUri (file.Name);
+				return IdeServices.DesktopService.GetMimeTypeDescription (type); 
 			}
 		}
 		
@@ -141,7 +151,7 @@ namespace MonoDevelop.DesignerSupport
 					context.Instance as ProjectFileDescriptor : null;
 				
 				if (descriptor != null && descriptor.file != null && descriptor.file.Project != null) {
-					return descriptor.file.Project.GetBuildActions ();
+					return descriptor.file.Project.GetBuildActions (descriptor.file.FilePath);
 				} else {
 					return new string[] {"Content", "None", "Compile"};
 				}

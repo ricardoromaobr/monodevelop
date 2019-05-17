@@ -33,6 +33,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using MonoDevelop.Ide.Codons;
 using MonoDevelop.Core;
+using MonoDevelop.Ide.Gui.Shell;
 
 namespace MonoDevelop.Ide.Gui
 {
@@ -96,6 +97,12 @@ namespace MonoDevelop.Ide.Gui
 				return categories;
 			}
 		}
+
+		public string Group {
+			get {
+				return content.Group;
+			}
+		}
 		
 		public void BringToFront ()
 		{
@@ -137,8 +144,7 @@ namespace MonoDevelop.Ide.Gui
 		
 		internal IMementoCapable GetMementoCapable ()
 		{
-			PadWindow pw = (PadWindow) window;
-			return pw.GetMementoCapable ();
+			return content?.PadContent as IMementoCapable;
 		}
 		
 		public void Destroy ()

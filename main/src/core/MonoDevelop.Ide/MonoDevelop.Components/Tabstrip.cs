@@ -1,4 +1,4 @@
-// 
+﻿// 
 // Tabstrip.cs
 //  
 // Author:
@@ -30,17 +30,18 @@ using System.ComponentModel;
 using System.Drawing.Design;
 using Cairo;
 using Gtk;
-using Mono.TextEditor;
 using System.Linq;
+using MonoDevelop.Components.AtkCocoaHelper;
+using MonoDevelop.Core;
+using MonoDevelop.Ide.Gui;
+using MonoDevelop.Ide.Fonts;
+using MonoDevelop.Ide;
+using MonoDevelop.Ide.Gui.Shell;
 
 namespace MonoDevelop.Components
 {
 	class Tabstrip : DrawingArea
 	{
-		static readonly Cairo.Color BackgroundGradientStart = new Cairo.Color (241d / 255d, 241d / 255d, 241d / 255d);
-		static readonly Cairo.Color BackgroundGradientEnd = BackgroundGradientStart;//new Cairo.Color (224d / 255d, 224d / 255d, 224d / 255d);
-		internal static readonly Cairo.Color ActiveGradientStart = new Cairo.Color (92d / 255d, 93d / 255d, 94d / 255d);
-		internal static readonly Cairo.Color ActiveGradientEnd = new Cairo.Color (134d / 255d, 136d / 255d, 137d / 255d);
 
 		readonly List<Tab> tabs = new List<Tab> ();
 		readonly List<Cairo.PointD> tabSizes = new List<Cairo.PointD> ();
@@ -57,9 +58,11 @@ namespace MonoDevelop.Components
 			set {
 				if (activeTab == value)
 					return;
-				tabs[activeTab].Active = false;
+				if (activeTab != -1)
+					tabs [activeTab].Active = false;
 				activeTab = value;
-				tabs[activeTab].Active = true;
+				if (activeTab != -1)
+					tabs [activeTab].Active = true;
 				QueueDraw ();
 			}
 		}
@@ -76,7 +79,9 @@ namespace MonoDevelop.Components
 		
 		public Tabstrip ()
 		{
-			Events |= Gdk.EventMask.ButtonPressMask | Gdk.EventMask.PointerMotionMask | Gdk.EventMask.LeaveNotifyMask;
+			Accessible.SetRole (AtkCocoa.Roles.AXTabGroup);
+			Events |= Gdk.EventMask.ButtonPressMask | Gdk.EventMask.PointerMotionMask | Gdk.EventMask.LeaveNotifyMask | Gdk.EventMask.FocusChangeMask;
+			CanFocus = true;
 		}
 		
 		protected override void OnDestroyed ()
@@ -103,9 +108,133 @@ namespace MonoDevelop.Components
 				tab.Active = true;
 			else if (activeTab >= index)
 				activeTab++;
+
+			if (focusedTab >= index) {
+				focusedTab++;
+			}
+
 			QueueResize ();
+
+			tab.Allocation = GetBounds (tab);
+			if (tab.Accessible != null) {
+				Accessible.AddAccessibleElement (tab.Accessible);
+				tab.AccessibilityPressed += OnTabPressed;
+				UpdateAccessibilityTabs ();
+			}
 		}
-		
+
+		public void RemoveTab (int index)
+		{
+			if (activeTab == index) {
+				if (index < tabs.Count - 1)
+					ActiveTab = index + 1;
+				else
+					ActiveTab = index - 1;
+			}
+
+			if (focusedTab == index) {
+				if (index == tabs.Count - 1)
+					focusedTab--;
+			} else if (focusedTab > index)
+				focusedTab--;
+
+			var tab = tabs [index];
+			tabs.RemoveAt (index);
+			tabSizes.RemoveAt (index);
+			if (activeTab > index)
+				activeTab--;
+			if (focusedTab >= index)
+				focusedTab = index;
+
+			QueueResize ();
+
+			if (tab.Accessible != null) {
+				Accessible.RemoveAccessibleElement (tab.Accessible);
+				tab.AccessibilityPressed -= OnTabPressed;
+				UpdateAccessibilityTabs ();
+			}
+
+			tab.Dispose ();
+		}
+
+		public void ReplaceTab (int position, Tab tab)
+		{
+			var oldTab = tabs [position];
+			tabs [position] = tab;
+			tabSizes [position] = tab.Size;
+
+			if (oldTab.Active)
+				tab.Active = true;
+
+			if (oldTab.Accessible != null) {
+				Accessible.RemoveAccessibleElement (oldTab.Accessible);
+				oldTab.AccessibilityPressed -= OnTabPressed;
+				UpdateAccessibilityTabs ();
+			}
+
+			oldTab.Dispose ();
+
+			QueueResize ();
+
+			tab.Allocation = GetBounds (tab);
+			if (tab.Accessible != null) {
+				Accessible.AddAccessibleElement (tab.Accessible);
+				tab.AccessibilityPressed += OnTabPressed;
+				UpdateAccessibilityTabs ();
+			}
+		}
+
+		internal void ReorderTabs (int currentIndex, int newIndex)
+		{
+			var replaced = tabs [newIndex];
+			tabs [newIndex] = tabs [currentIndex];
+			tabs [currentIndex] = replaced;
+
+			if (focusedTab == currentIndex)
+				focusedTab = newIndex;
+			else if (focusedTab == newIndex)
+				focusedTab = currentIndex;
+
+			// Active status of the tabs won't change, but the activeTab field may need to be updated
+			if (activeTab == currentIndex)
+				activeTab = newIndex;
+			else if (activeTab == newIndex)
+				activeTab = currentIndex;
+			Relayout ();
+		}
+
+		internal void Relayout ()
+		{
+			tabSizes.Clear ();
+			foreach (var t in tabs)
+				tabSizes.Add (t.Size);
+			QueueResize ();
+			UpdateAccessibilityTabs ();
+		}
+
+		void OnTabPressed (object sender, EventArgs args)
+		{
+			ActiveTab = tabs.IndexOf ((Tab)sender);
+		}
+
+		void UpdateAccessibilityTabs ()
+		{
+			if (!AccessibilityElementProxy.Enabled) {
+				return;
+			}
+
+			int i = 0;
+			var proxies = new AtkCocoaHelper.AccessibilityElementProxy [tabs.Count];
+			foreach (var tab in tabs) {
+				proxies [i] = tab.Accessible;
+				tab.Accessible.Index = i;
+				i++;
+				tab.Allocation = GetBounds (tab);
+			}
+
+			Accessible.SetTabs (proxies);
+		}
+
 		Cairo.Rectangle GetBounds (Tab tab)
 		{
 			if (tab == null)
@@ -157,7 +286,11 @@ namespace MonoDevelop.Components
 		protected override bool OnButtonPressEvent (Gdk.EventButton evnt)
 		{
 			if (hoverTab != null) {
-				ActiveTab = tabs.IndexOf (hoverTab);
+				try {
+					ActiveTab = tabs.IndexOf (hoverTab);
+				} catch (Exception ex) {
+					LoggingService.LogInternalError (ex);	
+				}
 			}
 			return base.OnButtonPressEvent (evnt);
 		}
@@ -176,36 +309,102 @@ namespace MonoDevelop.Components
 		{
 			requisition.Height = (int)Math.Ceiling (tabSizes.Max (p => p.Y));
 		}
-		
+
 		protected override bool OnExposeEvent (Gdk.EventExpose evnt)
 		{
 			using (var cr = Gdk.CairoHelper.Create (evnt.Window)) {
 				cr.Rectangle (0, 0, Allocation.Width, Allocation.Height);
-				using (LinearGradient gr = new LinearGradient (0, 0, 0, Allocation.Height)) {
-					gr.AddColorStop (0, BackgroundGradientStart);
-					gr.AddColorStop (1, BackgroundGradientEnd);
-					cr.SetSource (gr);
-				}
+				cr.SetSourceColor (Styles.SubTabBarBackgroundColor.ToCairoColor ());
 				cr.Fill ();
 
-				cr.MoveTo (0.5, 0.5);
-				cr.Line (0.5, 0.5, Allocation.Width - 1, 0.5);
-				cr.SetSourceRGB (1,1,1);
-				cr.LineWidth = 1;
-				cr.Stroke ();
-
+				Tab active = null;
 				for (int i = tabs.Count; i --> 0;) {
-					if (i == ActiveTab)
+					if (i == ActiveTab) {
+						active = tabs [i];
 						continue;
+					}
 					var tab = tabs[i];
 					var bounds = GetBounds (tab);
 					tab.HoverPosition = tab == hoverTab ? new Cairo.PointD (mx - bounds.X, my) : new Cairo.PointD (-1, -1);
 					tab.Draw (cr, bounds);
 				}
-				
-				tabs[ActiveTab].Draw (cr, GetBounds (tabs[ActiveTab]));
+
+				if (active != null) {
+					active.Draw (cr, GetBounds (active));
+				}
 			}
+
 			return base.OnExposeEvent (evnt);
+		}
+
+		int focusedTab = -1;
+		protected override bool OnFocused (DirectionType direction)
+		{
+			bool ret = true;
+			int oldFocus = focusedTab;
+
+			switch (direction) {
+			case DirectionType.TabForward:
+			case DirectionType.Right:
+				focusedTab++;
+				if (focusedTab >= tabs.Count) {
+					focusedTab = -1;
+					ret = false;
+				}
+				break;
+
+			case DirectionType.TabBackward:
+			case DirectionType.Left:
+				if (focusedTab <= -1) {
+					focusedTab = tabs.Count;
+				}
+				focusedTab--;
+				if (focusedTab < 0) {
+					focusedTab = -1;
+					ret = false;
+				}
+				break;
+			}
+
+			if (ret) {
+				GrabFocus ();
+				if (oldFocus >= 0 && oldFocus < tabs.Count) {
+					tabs [oldFocus].Focused = false;
+				}
+
+				if (focusedTab >= 0) {
+					tabs [focusedTab].Focused = true;
+				}
+			} else {
+				focusedTab = 0;
+			}
+			QueueDraw ();
+
+			return ret;
+		}
+
+		protected override bool OnFocusInEvent (Gdk.EventFocus evnt)
+		{
+			QueueDraw ();
+			return base.OnFocusInEvent (evnt);
+		}
+
+		protected override bool OnFocusOutEvent (Gdk.EventFocus evnt)
+		{
+			if (focusedTab > -1 && focusedTab <= tabs.Count) {
+				tabs [focusedTab].Focused = false;
+			}
+			focusedTab = -1;
+			QueueDraw ();
+			return base.OnFocusOutEvent (evnt);
+		}
+
+		protected override void OnActivate ()
+		{
+			if (focusedTab >= 0 && focusedTab < tabs.Count) {
+				ActiveTab = focusedTab;
+			}
+			base.OnActivate ();
 		}
 	}
 
@@ -218,13 +417,21 @@ namespace MonoDevelop.Components
 	{
 		internal static readonly int SpacerWidth = 8;
 		const int Padding = 6;
+		string label;
 		Pango.Layout layout;
 		Tabstrip parent;
 		int w, h;
 		
 		public string Label {
-			get;
-			private set;
+			get => label;
+			set {
+				if (value != label) {
+					label = value;
+					CreateLayout ();
+					if (parent != null)
+						parent.Relayout ();
+				}
+			}
 		}
 		
 		public TabPosition TabPosition {
@@ -255,6 +462,29 @@ namespace MonoDevelop.Components
 			get;
 			set;
 		}
+
+		public bool Focused {
+			get;
+			set;
+		}
+
+		Cairo.Rectangle allocation;
+		public Cairo.Rectangle Allocation {
+			get {
+				return allocation;
+			}
+
+			set {
+				allocation = value;
+
+				if (Accessible != null) {
+					Gdk.Rectangle gdkRect = new Gdk.Rectangle ((int)allocation.X, (int)allocation.Y, (int)allocation.Width, (int)allocation.Height);
+					Accessible.FrameInGtkParent = gdkRect;
+					// If Y != 0, then we need to flip the y axis
+					Accessible.FrameInParent = gdkRect;
+				}
+			}
+		}
 		
 		public Tab (Tabstrip parent, string label) : this (parent, label, TabPosition.Left)
 		{
@@ -267,31 +497,55 @@ namespace MonoDevelop.Components
 		
 		public void Dispose ()
 		{
+			if (Accessible != null) {
+				Accessible.PerformPress -= OnTabPressed;
+				Accessible = null;
+			}
+
 			if (layout != null)
-				layout.Dispose ();
+				layout.Dispose();
 		}
-		
+
+		public AtkCocoaHelper.AccessibilityElementProxy Accessible { get; private set; }
+
 		public Tab (Tabstrip parent, string label, TabPosition tabPosition)
 		{
 			this.parent = parent;
-			this.Label = label;
+			this.Label = label ?? "";
+
+			this.TabPosition = tabPosition;
+
+			if (AccessibilityElementProxy.Enabled) {
+				Accessible = AccessibilityElementProxy.ButtonElementProxy ();
+				Accessible.SetRole (AtkCocoa.Roles.AXRadioButton, "tab");
+				Accessible.Title = label ?? "";
+				Accessible.GtkParent = parent;
+				Accessible.Identifier = "Tabstrip.Tab";
+				Accessible.PerformPress += OnTabPressed;
+			}
+		}
+
+		void CreateLayout ()
+		{
+			if (layout != null)
+				layout.Dispose ();
+
 			layout = PangoUtil.CreateLayout (parent);
-			layout.SetText (label);
+			layout.FontDescription = IdeServices.FontService.SansFont.CopyModified (Styles.FontScale11);
+			layout.SetText (label ?? "");
 			layout.Alignment = Pango.Alignment.Center;
 			layout.GetPixelSize (out w, out h);
 
 			if (IsSeparator)
 				w = SpacerWidth * 2;
-			
-			this.TabPosition = tabPosition;
 		}
-		
+
 		public Cairo.PointD Size {
 			get {
 				if (IsSeparator)
-					return new Cairo.PointD (w, h + Padding*2);
+					return new Cairo.PointD (w, h + Padding * 2);
 				else
-					return new Cairo.PointD (Math.Max (45, w + SpacerWidth * 2), h + Padding*2);
+					return new Cairo.PointD (Math.Max (45, w + SpacerWidth * 2), h + Padding * 2);
 			}
 		}
 		
@@ -303,7 +557,7 @@ namespace MonoDevelop.Components
 				cr.MoveTo (x, rectangle.Y + 0.5 + 2);
 				cr.RelLineTo (0, rectangle.Height - 1 - 4);
 				cr.ClosePath ();
-				cr.SetSourceColor (parent.Style.Dark (StateType.Normal).ToCairoColor ());
+				cr.SetSourceColor (Styles.SubTabBarSeparatorColor.ToCairoColor ());
 				cr.LineWidth = 1;
 				cr.Stroke ();
 				return;
@@ -312,51 +566,40 @@ namespace MonoDevelop.Components
 			if (Active || HoverPosition.X >= 0) {
 				if (Active) {
 					cr.Rectangle (rectangle.X, rectangle.Y, rectangle.Width, rectangle.Height);
-					using (var gr = new LinearGradient (rectangle.X, rectangle.Y, rectangle.X, rectangle.Y + rectangle.Height)) {
-						gr.AddColorStop (0, Tabstrip.ActiveGradientStart);
-						gr.AddColorStop (1, Tabstrip.ActiveGradientEnd);
-						cr.SetSource (gr);
-					}
+					cr.SetSourceColor (Styles.SubTabBarActiveBackgroundColor.ToCairoColor ());
 					cr.Fill ();
-					cr.Rectangle (rectangle.X + 0.5, rectangle.Y + 0.5, rectangle.Width - 1, rectangle.Height - 1);
-					cr.SetSourceRGBA (1, 1, 1, 0.05);
-					cr.LineWidth = 1;
-					cr.Stroke ();
 				} else if (HoverPosition.X >= 0) {
 					cr.Rectangle (rectangle.X, rectangle.Y, rectangle.Width, rectangle.Height);
-					using (var gr = new LinearGradient (rectangle.X, rectangle.Y, rectangle.X, rectangle.Y + rectangle.Height)) {
-						var c1 = Tabstrip.ActiveGradientStart;
-						var c2 = Tabstrip.ActiveGradientEnd;
-						c1.A = 0.2;
-						c2.A = 0.2;
-						gr.AddColorStop (0, c1);
-						gr.AddColorStop (1, c2);
-						cr.SetSource (gr);
-					}
+					cr.SetSourceColor (Styles.SubTabBarHoverBackgroundColor.ToCairoColor ());
 					cr.Fill ();
 				}
 			}
 
-			if (Active)
-				cr.SetSourceRGB (1, 1, 1);
-			else
-				cr.SetSourceColor (parent.Style.Text (StateType.Normal).ToCairoColor ());
+			if (Active) {
+				cr.SetSourceColor (Styles.SubTabBarActiveTextColor.ToCairoColor ());
+				layout.FontDescription = IdeServices.FontService.SansFont.CopyModified (Styles.FontScale11, Pango.Weight.Bold);
+			} else {
+				cr.SetSourceColor (Styles.SubTabBarTextColor.ToCairoColor ());
+				layout.FontDescription = IdeServices.FontService.SansFont.CopyModified (Styles.FontScale11);
+			}
 
-			if (layout.Width != (int)rectangle.Width)
-				layout.Width = (int)rectangle.Width;
+			// Pango.Layout.Width is in pango units
+			layout.Width = (int)rectangle.Width * (int)Pango.Scale.PangoScale;
 
-			#if MAC
-			/* On Cocoa, Pango doesn't render text correctly using layout width/height computation.
-			 * For instance here we need to balance some kind of internal padding by two pixels which
-			 * only happens on Mac.
-			 */
-			const int verticalOffset = -2;
-			#else
-			const int verticalOffset = 0;
-			#endif
-
-			cr.MoveTo (rectangle.X + (int)(rectangle.Width / 2), (rectangle.Height - h) / 2 + verticalOffset);
+			cr.MoveTo (rectangle.X, (rectangle.Height - h) / 2 - 1);
 			Pango.CairoHelper.ShowLayout (cr, layout);
+
+			if (parent.HasFocus && Focused) {
+				cr.LineWidth = 1.0;
+				cr.SetDash (new double[] { 1, 1 }, 0.5);
+				if (Active) {
+					cr.SetSourceColor (Styles.SubTabBarActiveTextColor.ToCairoColor ());
+				} else {
+					cr.SetSourceColor (Styles.FocusColor.ToCairoColor ());
+				}
+				cr.Rectangle (rectangle.X + 2, rectangle.Y + 2, rectangle.Width - 4, rectangle.Height - 4);
+				cr.Stroke ();
+			}
 		}
 		
 		public override string ToString ()
@@ -371,7 +614,14 @@ namespace MonoDevelop.Components
 				handler (this, e);
 		}
 
+		void OnTabPressed (object sender, EventArgs e)
+		{
+			// Proxy the event to the tab bar so it can set this tab as active
+			AccessibilityPressed?.Invoke (this, e);
+		}
+
 		public event EventHandler Activated;
+		public event EventHandler AccessibilityPressed;
 	}
 }
 

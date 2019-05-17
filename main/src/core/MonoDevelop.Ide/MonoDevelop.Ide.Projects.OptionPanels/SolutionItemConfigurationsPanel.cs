@@ -43,7 +43,7 @@ namespace MonoDevelop.Ide.Projects.OptionPanels
 	{
 		CombineEntryConfigurationsPanelWidget widget;
 		
-		public override Widget CreatePanelWidget ()
+		public override Control CreatePanelWidget ()
 		{
 			MultiConfigItemOptionsDialog dlg = (MultiConfigItemOptionsDialog) ParentDialog;
 			return (widget = new CombineEntryConfigurationsPanelWidget (dlg));
@@ -68,6 +68,7 @@ namespace MonoDevelop.Ide.Projects.OptionPanels
 			
 			store = new TreeStore (typeof(object), typeof(string));
 			configsList.Model = store;
+			configsList.SearchColumn = -1; // disable the interactive search
 			configsList.HeadersVisible = true;
 			store.SetSortColumnId (1, SortType.Ascending);
 			
@@ -163,9 +164,10 @@ namespace MonoDevelop.Ide.Projects.OptionPanels
 			try {
 				bool done = false;
 				do {
-					if (MessageService.RunCustomDialog (dlg, Toplevel as Window) == (int) Gtk.ResponseType.Ok) {
-						configData.RenameConfiguration (cc.Id, dlg.ConfigName, dlg.RenameChildren);
-						store.SetValue (iter, 1, cc.Id);
+					if (MessageService.RunCustomDialog (dlg, Toplevel as Gtk.Window) == (int) Gtk.ResponseType.Ok) {
+						var newConf = configData.RenameConfiguration (cc.Id, dlg.ConfigName, dlg.RenameChildren);
+						store.SetValue (iter, 0, newConf);
+						store.SetValue (iter, 1, newConf.Id);
 						done = true;
 					} else
 						done = true;

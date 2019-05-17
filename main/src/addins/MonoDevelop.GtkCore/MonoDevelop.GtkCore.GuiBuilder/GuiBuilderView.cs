@@ -28,6 +28,7 @@
 
 
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.ComponentModel;
 
@@ -37,16 +38,20 @@ using MonoDevelop.Ide.Gui;
 using MonoDevelop.Ide.Commands;
 using MonoDevelop.Components.Commands;
 using MonoDevelop.Projects;
-using MonoDevelop.DesignerSupport.Toolbox; 
+using MonoDevelop.DesignerSupport.Toolbox;
 using MonoDevelop.DesignerSupport;
 
 using Gtk;
 using Gdk;
 using MonoDevelop.Ide;
+using Microsoft.CodeAnalysis;
+using System.Threading.Tasks;
+using MonoDevelop.Refactoring;
+using MonoDevelop.Ide.Gui.Documents;
 
 namespace MonoDevelop.GtkCore.GuiBuilder
 {
-	public class GuiBuilderView : CombinedDesignView, ISupportsProjectReload
+	public class GuiBuilderView : CombinedDesignView
 	{
 		Stetic.WidgetDesigner designer;
 		Stetic.ActionGroupDesigner actionsBox;
@@ -60,21 +65,29 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 		GuiBuilderProject gproject;
 		string rootName;
 		object designerStatus;
-		
-		public GuiBuilderView (IViewContent content, GuiBuilderWindow window): base (content)
+
+		public GuiBuilderView (GuiBuilderWindow window)
 		{
 			rootName = window.Name;
-			
-			designerPage = new DesignerPage (window.Project);
-			designerPage.Show ();
-			AddButton (GettextCatalog.GetString ("Designer"), designerPage);
-			
-			actionsPage = new ActionGroupPage ();
-			actionsPage.Show ();
-			
-			AttachWindow (window);
+			this.window = window;
 		}
-		
+
+		protected override async Task<DocumentView> OnInitializeView ()
+		{
+			designerPage = new DesignerPage (window.Project);
+			actionsPage = new ActionGroupPage ();
+			designerPage.Show ();
+			actionsPage.Show ();
+
+			var view = await base.OnInitializeView ();
+
+			AddButton (GettextCatalog.GetString ("Designer"), designerPage);
+
+			AttachWindow (window);
+
+			return view;
+		}
+
 		void AttachWindow (GuiBuilderWindow window)
 		{
 			gproject = window.Project;
@@ -83,15 +96,22 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 			gproject.UpdateLibraries ();
 			LoadDesigner ();
 		}
-		
-		ProjectReloadCapability ISupportsProjectReload.ProjectReloadCapability {
-			get {
-				return ProjectReloadCapability.Full;
-			}
-		}
-		
-		void ISupportsProjectReload.Update (Project project)
+
+		internal protected override ProjectReloadCapability OnGetProjectReloadCapability ()
 		{
+			return ProjectReloadCapability.Full;
+		}
+
+		protected override void OnOwnerChanged ()
+		{
+			base.OnOwnerChanged ();
+
+			// View not yet initialized
+			if (designerPage == null)
+				return;
+
+			var project = Owner as Projects.Project;
+
 			if (gproject != null && gproject.Project == project)
 				return;
 			
@@ -101,7 +121,7 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 			CloseDesigner ();
 			CloseProject ();
 			if (project != null) {
-				GuiBuilderWindow w = GuiBuilderDisplayBinding.GetWindow (this.ContentName);
+				GuiBuilderWindow w = GuiBuilderDisplayBinding.GetWindow (FilePath, project);
 				if (w != null) {
 					AttachWindow (w);
 					if (designerStatus != null)
@@ -221,15 +241,16 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 		
 		void CloseProject ()
 		{
-			gproject.Reloaded -= OnReloadProject;
+			if (gproject != null)
+				gproject.Reloaded -= OnReloadProject;
 		}
 		
-		public override void Dispose ()
+		protected override void OnDispose ()
 		{
 			CloseDesigner ();
 			CloseProject ();
 			codeBinder = null;
-			base.Dispose ();
+			base.OnDispose ();
 		}
 		
 		Gtk.Widget CreateDesignerNotAvailableWidget ()
@@ -262,7 +283,7 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 			codeBinder.TargetObject = designer.RootComponent;
 		}
 		
-		void OnComponentNameChanged (object s, Stetic.ComponentNameEventArgs args)
+		async void OnComponentNameChanged (object s, Stetic.ComponentNameEventArgs args)
 		{
 			try {
 				// Make sure the fields in the partial class are up to date.
@@ -273,7 +294,7 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 				if (gproject.Project.UsePartialTypes)
 					GuiBuilderService.GenerateSteticCodeStructure ((DotNetProject)gproject.Project, designer.RootComponent, args, false, false);
 				
-				codeBinder.UpdateField (args.Component, args.OldName);
+				await codeBinder.UpdateField (args.Component, args.OldName);
 			}
 			catch (Exception ex) {
 				LoggingService.LogInternalError (ex);
@@ -294,21 +315,19 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 		
 		void OnWindowModifiedChanged (object s, EventArgs args)
 		{
-			if (IsDirty)
-				OnContentChanged (args);
-			OnDirtyChanged (args);
+			OnCombinedDirtyChanged ();
 		}
 		
-		void OnBindWidgetField (object o, EventArgs a)
+		async void OnBindWidgetField (object o, EventArgs a)
 		{
 			if (designer.Selection != null)
-				codeBinder.BindToField (designer.Selection);
+				await codeBinder.BindToField (designer.Selection);
 		}
 		
-		void OnBindActionField (object o, EventArgs a)
+		async void OnBindActionField (object o, EventArgs a)
 		{
 			if (actionsBox.SelectedAction != null)
-				codeBinder.BindToField (actionsBox.SelectedAction);
+				await codeBinder.BindToField (actionsBox.SelectedAction);
 		}
 		
 		void OnSignalAdded (object sender, Stetic.ComponentSignalEventArgs args)
@@ -320,21 +339,21 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 		{
 		}
 
-		void OnSignalChanged (object sender, Stetic.ComponentSignalEventArgs args)
+		async void OnSignalChanged (object sender, Stetic.ComponentSignalEventArgs args)
 		{
-			codeBinder.UpdateSignal (args.OldSignal, args.Signal);
+			await codeBinder.UpdateSignal (args.OldSignal, args.Signal);
 		}
 		
-		public override void Save (string fileName)
+		protected override async Task OnSave ()
 		{
-			base.Save (fileName);
+			await base.OnSave ();
 			
 			if (designer == null)
 				return;
 			
 			string oldBuildFile = GuiBuilderService.GetBuildCodeFileName (gproject.Project, window.RootWidget.Name);
 			
-			codeBinder.UpdateBindings (fileName);
+			codeBinder.UpdateBindings (FilePath);
 			if (!ErrorMode) {
 				if (designer != null)
 					designer.Save ();
@@ -353,28 +372,29 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 			gproject.SaveWindow (true, window.RootWidget.Name);
 		}
 		
-		public override bool IsDirty {
+		protected override bool IsDirtyCombined {
 			get {
 				// There is no need to check if the action group designer is modified
 				// since changes in the action group are as well changes in the designed widget
-				return base.IsDirty || (designer != null && designer.Modified);
+				return base.IsDirtyCombined || (designer != null && designer.Modified);
 			}
 			set {
-				base.IsDirty = value;
+				base.IsDirtyCombined = value;
 			}
 		}
-		
+
 		public override void JumpToSignalHandler (Stetic.Signal signal)
 		{
 			var cls = codeBinder.GetClass ();
 			if (cls == null)
 				return;
-			foreach (var met in cls.Methods) {
-				if (met.Name == signal.Handler) {
-					ShowPage (0);
-					JumpTo (met.Region.BeginLine, met.Region.BeginColumn);
-					break;
-				}
+			var met = cls
+				.GetMembers (signal.Handler)
+				.OfType<IMethodSymbol> ()
+				.FirstOrDefault ();
+			if (met != null) {
+				ShowPage (0);
+				RefactoringService.RoslynJumpToDeclaration (met);
 			}
 		}
 		
@@ -490,7 +510,7 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 			if (node.Reference == null)
 				return;
 			
-			ProjectReference pref;
+			MonoDevelop.Projects.ProjectReference pref;
 			
 			// If the class name includes an assembly name it means that the
 			// widget is implemented in another assembly, not in the one that
@@ -506,16 +526,16 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 				if (asm == null)
 					return;
 				if (gproject.Project.AssemblyContext.GetPackagesFromFullName (asm).Length > 0) {
-					pref = new ProjectReference (ReferenceType.Package, asm);
+					pref = MonoDevelop.Projects.ProjectReference.CreateAssemblyReference (asm);
 				} else {
 					asm = gproject.Project.AssemblyContext.GetAssemblyLocation (asm, gproject.Project.TargetFramework);
-					pref = new ProjectReference (ReferenceType.Assembly, asm);
+					pref = MonoDevelop.Projects.ProjectReference.CreateAssemblyFileReference (asm);
 				}
 			}
 			else
-				pref = new ProjectReference (node.ReferenceType, node.Reference);
+				pref = MonoDevelop.Projects.ProjectReference.CreateCustomReference (node.ReferenceType, node.Reference);
 			
-			foreach (ProjectReference pr in gproject.Project.References) {
+			foreach (var pr in gproject.Project.References) {
 				if (pr.Reference == pref.Reference)
 					return;
 			}

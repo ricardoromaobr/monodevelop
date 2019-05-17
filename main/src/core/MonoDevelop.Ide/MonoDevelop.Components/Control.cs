@@ -24,7 +24,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 using System;
+using System.Collections.Generic;
 using MonoDevelop.Components.Commands;
+using System.Runtime.CompilerServices;
 
 #if MAC
 using AppKit;
@@ -33,25 +35,22 @@ using MonoDevelop.Components.Mac;
 
 namespace MonoDevelop.Components
 {
-	public class Control: IDisposable
+	public class Control : IDisposable, ICommandRouter
 	{
-		object nativeWidget;
+		internal static ConditionalWeakTable<object, Control> cache = new ConditionalWeakTable<object, Control> ();
+		internal object nativeWidget; // TODO: This should be a weak reference, not a strong reference, if we're not passing ownership
 
 		protected Control ()
 		{
 		}
 
-		public Control (object widget)
+		protected Control (object widget)
 		{
-			this.nativeWidget = widget;
+			nativeWidget = widget ?? throw new ArgumentNullException (nameof (widget));
+			cache.Add (nativeWidget, this);
 		}
 
-		~Control ()
-		{
-			Dispose (false);
-		}
-
-		protected virtual object CreateNativeWidget ()
+		protected virtual object CreateNativeWidget<T> ()
 		{
 			throw new NotSupportedException ();
 		}
@@ -59,25 +58,43 @@ namespace MonoDevelop.Components
 		public T GetNativeWidget<T> ()
 		{
 			if (nativeWidget == null) {
-				var w = CreateNativeWidget ();
-				if (!(w is T))
-					w = ConvertToType (typeof(T), w);
+				var toCache = this;
+				var w = CreateNativeWidget<T> ();
+				if (!(w is T)) {
+					var temp = w as Control;
+					while (temp != null) {
+						w = temp.GetNativeWidget<T> ();
+						temp = w as Control;
+					}
+					w = ConvertToType (typeof (T), w);
+				}
 				if (w is Gtk.Widget) {
-					var c = new CommandRouterContainer ((Gtk.Widget)w, this, true);
+					var gtkWidget = (Gtk.Widget)w;
+					var c = new CommandRouterContainer (gtkWidget, this, true);
+					c.FocusChain = new [] { gtkWidget };
 					c.Show ();
 					nativeWidget = c;
-					c.Destroyed += delegate {
-						GC.SuppressFinalize (this);
-						Dispose (true);
-					};
-				}
-				else
+					c.Destroyed += OnGtkDestroyed;
+					toCache = c;
+				} else {
 					nativeWidget = w;
+				}
+				if (cache.TryGetValue (nativeWidget, out Control target)) {
+					if (target != toCache)
+						throw new InvalidOperationException ($"Widget {nativeWidget.GetType ()} has been mapped to multiple controls");
+				} else
+					cache.Add (nativeWidget, toCache);
 			}
-			if (nativeWidget is T)
-				return (T)nativeWidget;
+			if (nativeWidget is T resultWidget)
+				return resultWidget;
 			else
 				throw new NotSupportedException ();
+		}
+
+		void OnGtkDestroyed (object sender, EventArgs args)
+		{
+			GC.SuppressFinalize (this);
+			Dispose (true);
 		}
 
 		static object ConvertToType (Type t, object w)
@@ -85,51 +102,131 @@ namespace MonoDevelop.Components
 			if (t.IsInstanceOfType (w))
 				return w;
 
-			#if MAC
-			if (w is NSView && t == typeof(Gtk.Widget)) {
+#if MAC
+			if (w is NSView && t == typeof (Gtk.Widget)) {
 				var ww = GtkMacInterop.NSViewToGtkWidget ((NSView)w);
 				ww.Show ();
 				return ww;
 			}
-			if (w is Gtk.Widget && t == typeof(NSView)) {
+			if (w is Gtk.Widget && t == typeof (NSView)) {
 				return new GtkEmbed ((Gtk.Widget)w);
 			}
-			#endif
+#endif
 			throw new NotSupportedException ();
 		}
 
+#if MAC
+		public static implicit operator NSView (Control d)
+		{
+			return d.GetNativeWidget<NSView> ();
+		}
+
+		public static implicit operator Control (NSView d)
+		{
+			if (d == null)
+				return null;
+
+			return GetImplicit<Control, NSView> (d) ?? new Control (d);
+		}
+#endif
+
 		public static implicit operator Gtk.Widget (Control d)
 		{
-			return d.GetNativeWidget<Gtk.Widget> ();
+			return d?.GetNativeWidget<Gtk.Widget> ();
 		}
 
 		public static implicit operator Control (Gtk.Widget d)
 		{
-			return new Control (d);
+			if (d == null)
+				return null;
+
+			var control = GetImplicit<Control, Gtk.Widget>(d);
+			if (control == null) {
+				control = new Control (d);
+				d.Destroyed += delegate {
+					GC.SuppressFinalize (control);
+					control.Dispose (true);
+				};
+			}
+			return control;
 		}
 
-		public void GrabFocus ()
+		public static implicit operator Xwt.Widget (Control d)
 		{
+			if (d is AbstractXwtControl)
+				return ((AbstractXwtControl)d).Widget;
+			
+			object nativeWidget;
+			if (Xwt.Toolkit.CurrentEngine.Type == Xwt.ToolkitType.Gtk && (nativeWidget = d?.GetNativeWidget<Gtk.Widget> ()) != null) {
+				return Xwt.Toolkit.CurrentEngine.WrapWidget (nativeWidget, Xwt.NativeWidgetSizing.DefaultPreferredSize);
+			}
+#if MAC
+			else if (Xwt.Toolkit.CurrentEngine.Type == Xwt.ToolkitType.XamMac && (nativeWidget = d?.GetNativeWidget<NSView> ()) != null) {
+				return Xwt.Toolkit.CurrentEngine.WrapWidget (nativeWidget, Xwt.NativeWidgetSizing.DefaultPreferredSize);
+			}
+#endif
+			throw new NotSupportedException ();
+		}
+
+		internal static T GetImplicit<T, U> (U native) where T : Control where U : class
+		{
+			if (cache.TryGetValue (native, out Control target) && target is T ret) {
+				return ret;
+			}
+			return null;
+		}
+
+		public virtual void GrabFocus ()
+		{
+			if (nativeWidget is Gtk.Widget)
+				((Gtk.Widget)nativeWidget).GrabFocus ();
 			// TODO
+		}
+
+
+		public virtual bool HasFocus {
+			get
+			{
+				// TODO
+				if (nativeWidget is Gtk.Widget)
+					return ((Gtk.Widget)nativeWidget).HasFocus;
+				return false;
+			}
 		}
 
 		public void Dispose ()
 		{
-			if (nativeWidget is Gtk.Widget) {
-				((Gtk.Widget)nativeWidget).Destroy ();
-				return;
+			var gtkWidget = nativeWidget as Gtk.Widget;
+			if (gtkWidget != null) {
+				gtkWidget.Destroy ();
 			}
-			#if MAC
+#if MAC
 			else if (nativeWidget is NSView)
 				((NSView)nativeWidget).Dispose ();
-			#endif
+#endif
 
-			GC.SuppressFinalize (this);
 			Dispose (true);
 		}
 
 		protected virtual void Dispose (bool disposing)
 		{
+			if (nativeWidget != null)
+				cache.Remove (nativeWidget);
+
+			var gtkWidget = nativeWidget as Gtk.Widget;
+			if (gtkWidget != null) {
+				gtkWidget.Destroyed -= OnGtkDestroyed;
+			}
+		}
+
+		protected virtual object GetNextCommandTarget ()
+		{
+			return nativeWidget;
+		}
+
+		object ICommandRouter.GetNextCommandTarget ()
+		{
+			return GetNextCommandTarget ();
 		}
 	}
 }

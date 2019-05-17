@@ -37,7 +37,7 @@ namespace MonoDevelop.VersionControl
 		{
 			VersionControlItemList list = new VersionControlItemList ();
 			
-			IWorkspaceObject wob;
+			WorkspaceObject wob;
 			Repository repo = null;
 			wob = IdeApp.ProjectOperations.CurrentSelectedWorkspaceItem;
 			if (wob != null)
@@ -95,7 +95,7 @@ namespace MonoDevelop.VersionControl
 			if (doc == null || !doc.IsFile)
 				return null;
 			
-			Project project = doc.Project ?? IdeApp.ProjectOperations.CurrentSelectedProject;
+			var project = doc.Owner ?? IdeApp.ProjectOperations.CurrentSelectedProject;
 			if (project == null)
 				return null;
 			
@@ -243,15 +243,14 @@ namespace MonoDevelop.VersionControl
 		}
 	}
 
-	class CurrentFileViewHandler<T> : FileVersionControlCommandHandler where T:IAttachableViewContent
+	class CurrentFileViewHandler<T> : FileVersionControlCommandHandler
 	{
 		protected override bool RunCommand (VersionControlItemList items, bool test)
 		{
 			if (test)
 				return true;
 
-			var window = IdeApp.Workbench.ActiveDocument.Window;
-			window.SwitchView (window.FindView<T> ());
+			IdeApp.Workbench.ActiveDocument?.GetContent<VersionControlDocumentController> ()?.ShowDiffView ();
 			return true;
 		}
 	}

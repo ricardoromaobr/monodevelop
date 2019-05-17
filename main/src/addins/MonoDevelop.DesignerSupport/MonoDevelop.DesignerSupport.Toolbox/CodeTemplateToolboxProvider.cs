@@ -29,33 +29,49 @@
 using System;
 using MonoDevelop.Ide.CodeTemplates;
 using MonoDevelop.Ide;
+using MonoDevelop.Ide.Gui.Documents;
+using System.Collections.Generic;
+using MonoDevelop.Core;
 
 namespace MonoDevelop.DesignerSupport.Toolbox
 {
-	
+
 	public class CodeTemplateToolboxProvider : IToolboxDynamicProvider
 	{
-		static string category = MonoDevelop.Core.GettextCatalog.GetString ("Text Snippets");
+		static string category = GettextCatalog.GetString ("Text Snippets");
 
+		readonly FilePath filePath;
 
-		public System.Collections.Generic.IEnumerable<ItemToolboxNode> GetDynamicItems (IToolboxConsumer consumer)
+		public CodeTemplateToolboxProvider ()
 		{
-			
-			MonoDevelop.Ide.Gui.Content.IExtensibleTextEditor editor 
-				= consumer as MonoDevelop.Ide.Gui.Content.IExtensibleTextEditor;
-			if (editor != null) {
-				foreach (CodeTemplate ct in CodeTemplateService.GetCodeTemplatesForFile (editor.Name)) {
-					if (ct.CodeTemplateContext != CodeTemplateContext.Standard)
-						continue;
-					yield return new TemplateToolboxNode (ct) {
-						Category = category,
-						Icon = ImageService.GetIcon ("md-template", Gtk.IconSize.Menu)
-					};
-				}
-			}
-			yield break;
 		}
-		
+
+		public CodeTemplateToolboxProvider (FilePath filePath)
+		{
+			this.filePath = filePath;
+		}
+
+		public IEnumerable<ItemToolboxNode> GetDynamicItems (IToolboxConsumer consumer)
+		{
+			var file = filePath;
+
+			if (file.IsNullOrEmpty) {
+				if (!(consumer is FileDocumentController content) || !consumer.IsTextEditor (out var _)) {
+					yield break;
+				}
+				file = content.FilePath;
+			}
+
+			foreach (CodeTemplate ct in CodeTemplateService.GetCodeTemplatesForFile (file)) {
+				if (ct.CodeTemplateContext != CodeTemplateContext.Standard)
+					continue;
+				yield return new TemplateToolboxNode (ct) {
+					Category = category,
+					Icon = ImageService.GetIcon ("md-template", Gtk.IconSize.Menu)
+				};
+			}
+		}
+
 		public event EventHandler ItemsChanged {
 			add { CodeTemplateService.TemplatesChanged += value; }
 			remove { CodeTemplateService.TemplatesChanged -= value; }

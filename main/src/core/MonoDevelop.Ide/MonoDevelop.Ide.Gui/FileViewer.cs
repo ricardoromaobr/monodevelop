@@ -30,12 +30,14 @@ using System;
 using MonoDevelop.Ide.Codons;
 using MonoDevelop.Ide.Desktop;
 using System.Text;
+using System.Threading.Tasks;
+using MonoDevelop.Ide.Gui.Documents;
 
 namespace MonoDevelop.Ide.Gui
 {
 	public class FileViewer
 	{
-		IViewDisplayBinding binding;
+		DocumentControllerDescription binding;
 		DesktopApplication app;
 		
 		internal FileViewer (DesktopApplication app)
@@ -43,7 +45,7 @@ namespace MonoDevelop.Ide.Gui
 			this.app = app;
 		}
 		
-		internal FileViewer (IViewDisplayBinding binding)
+		internal FileViewer (DocumentControllerDescription binding)
 		{
 			this.binding = binding;
 		}
@@ -71,7 +73,7 @@ namespace MonoDevelop.Ide.Gui
 			if (fv == null)
 				return false;
 			if (binding != null)
-				return binding == fv.binding;
+				return binding.Equals (fv.binding);
 			else
 				return app.Equals (fv.app);
 		}
@@ -84,18 +86,18 @@ namespace MonoDevelop.Ide.Gui
 				return app.GetHashCode ();
 		}
 		
-		public Document OpenFile (string filePath)
+		public Task<Document> OpenFile (string filePath)
 		{
 			return OpenFile (filePath, null);
 		}
 		
-		public Document OpenFile (string filePath, Encoding encoding)
+		public Task<Document> OpenFile (string filePath, Encoding encoding)
 		{
 			if (binding != null)
-				return IdeApp.Workbench.OpenDocument (filePath, -1, -1, OpenDocumentOptions.Default, encoding, binding);
+				return IdeApp.Workbench.OpenDocument (filePath, null, -1, -1, OpenDocumentOptions.Default & ~OpenDocumentOptions.TryToReuseViewer, encoding, binding);
 			else {
 				app.Launch (filePath);
-				return null;
+				return Task.FromResult<Document> (null);
 			}
 		}
 	}

@@ -29,15 +29,16 @@ using System.Collections.Generic;
 using System.Linq;
 using Mono.Addins;
 using ICSharpCode.NRefactory.TypeSystem;
-using Mono.TextEditor;
 using MonoDevelop.Core.AddIns;
 using MonoDevelop.Ide.TypeSystem;
 using ICSharpCode.NRefactory;
 using MonoDevelop.Projects.Policies;
 using MonoDevelop.Ide.Extensions;
+using MonoDevelop.Ide.Editor;
 
 namespace MonoDevelop.Ide.TypeSystem
 {
+	[Obsolete("Use Roslyn APIs")]
 	public abstract class CodeGenerator
 	{
 		static Dictionary<string, MimeTypeExtensionNode> generators = new Dictionary<string, MimeTypeExtensionNode> ();
@@ -67,36 +68,39 @@ namespace MonoDevelop.Ide.TypeSystem
 			set;
 		}
 
-		public ICompilation Compilation {
-			get;
-			set;
-		}
-
-		public static CodeGenerator CreateGenerator (Ide.Gui.Document doc)
-		{
-			MimeTypeExtensionNode node;
-			if (!generators.TryGetValue (doc.Editor.MimeType, out node))
-				return null;
-
-			var result = (CodeGenerator)node.CreateInstance ();
-			result.UseSpaceIndent = doc.Editor.TabsToSpaces;
-			result.EolMarker = doc.Editor.EolMarker;
-			result.TabSize = doc.Editor.Options.TabSize;
-			result.Compilation = doc.Compilation;
-			return result;
-		}
-		
-		public static CodeGenerator CreateGenerator (TextEditorData editor, ICompilation compilation)
+		public static CodeGenerator CreateGenerator (TextEditor editor, DocumentContext documentContext)
 		{
 			MimeTypeExtensionNode node;
 			if (!generators.TryGetValue (editor.MimeType, out node))
 				return null;
 
 			var result = (CodeGenerator)node.CreateInstance ();
-			result.UseSpaceIndent = editor.TabsToSpaces;
+
+			result.UseSpaceIndent = editor.Options.TabsToSpaces;
 			result.EolMarker = editor.EolMarker;
 			result.TabSize = editor.Options.TabSize;
-			result.Compilation = compilation;
+
+			return result;
+		}
+
+		public static CodeGenerator CreateGenerator (Ide.Gui.Document doc)
+		{
+			return CreateGenerator (doc.Editor, doc.DocumentContext);
+		}
+
+		public static CodeGenerator CreateGenerator (ITextDocument editor, ICompilation compilation)
+		{
+			MimeTypeExtensionNode node;
+			if (!generators.TryGetValue (editor.MimeType, out node))
+				return null;
+
+			var result = (CodeGenerator)node.CreateInstance ();
+
+			//result.UseSpaceIndent = editor.Options.TabsToSpaces;
+			result.EolMarker = editor.GetEolMarker ();
+			//result.TabSize = editor.Options.TabSize;
+			//result.Compilation = compilation;
+
 			return result;
 		}
 
@@ -154,12 +158,6 @@ namespace MonoDevelop.Ide.TypeSystem
 			generators.Remove (node.MimeType);
 		}
 
-		protected void SetIndentTo (IUnresolvedTypeDefinition implementingType)
-		{
-			if (IndentLevel < 0)
-				IndentLevel = AutoIndent ? CodeGenerationService.CalculateBodyIndentLevel (implementingType) : 0;
-		}
-
 		static bool CompareMethods (IMethod interfaceMethod, IMethod typeMethod)
 		{
 			if (typeMethod.IsExplicitInterfaceImplementation)
@@ -168,15 +166,26 @@ namespace MonoDevelop.Ide.TypeSystem
 		}
 
 		public abstract string WrapInRegions (string regionName, string text);
-		public abstract CodeGeneratorMemberResult CreateMemberImplementation (ITypeDefinition implementingType, IUnresolvedTypeDefinition part, IUnresolvedMember member, bool explicitDeclaration);
-		public abstract CodeGeneratorMemberResult CreateMemberImplementation (ITypeDefinition implementingType, IUnresolvedTypeDefinition part, IMember member, bool explicitDeclaration);
 
-		public abstract string CreateFieldEncapsulation (IUnresolvedTypeDefinition implementingType, IField field, string propertyName, Accessibility modifiers, bool readOnly);
+		public abstract void AddGlobalNamespaceImport (TextEditor editor, DocumentContext context, string nsName);
+		public abstract void AddLocalNamespaceImport (TextEditor editor, DocumentContext context, string nsName, TextLocation caretLocation);
 
-		public abstract void AddGlobalNamespaceImport (MonoDevelop.Ide.Gui.Document doc, string nsName);
-		public abstract void AddLocalNamespaceImport (MonoDevelop.Ide.Gui.Document doc, string nsName, TextLocation caretLocation);
+		public void AddGlobalNamespaceImport (MonoDevelop.Ide.Gui.Document doc, string nsName)
+		{
+			if (doc == null)
+				throw new ArgumentNullException ("doc");
+			AddGlobalNamespaceImport (doc.Editor, doc.DocumentContext, nsName);
+		}
 
-		public abstract string GetShortTypeString (MonoDevelop.Ide.Gui.Document doc, IType type);
+		public void AddLocalNamespaceImport (MonoDevelop.Ide.Gui.Document doc, string nsName, TextLocation caretLocation)
+		{
+			if (doc == null)
+				throw new ArgumentNullException ("doc");
+			AddLocalNamespaceImport (doc.Editor, doc.DocumentContext, nsName, caretLocation);
+		}
+
+
+		//public abstract string GetShortTypeString (TextEditor editor, DocumentContext context, IType type);
 
 		public abstract void CompleteStatement (MonoDevelop.Ide.Gui.Document doc);
 	}

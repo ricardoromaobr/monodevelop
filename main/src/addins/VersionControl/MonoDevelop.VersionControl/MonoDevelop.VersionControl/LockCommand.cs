@@ -25,6 +25,7 @@
 //
 //
 
+using System;
 using System.Linq;
 using MonoDevelop.Core;
 
@@ -43,7 +44,7 @@ namespace MonoDevelop.VersionControl
 			return true;
 		}
 
-		private class LockWorker : Task 
+		private class LockWorker : VersionControlTask 
 		{
 			VersionControlItemList items;
 						
@@ -54,14 +55,19 @@ namespace MonoDevelop.VersionControl
 			protected override string GetDescription() {
 				return GettextCatalog.GetString ("Locking...");
 			}
-			
+
 			protected override void Run ()
 			{
-				foreach (VersionControlItemList list in items.SplitByRepository ())
-					list[0].Repository.Lock (Monitor, list.Paths);
-				
-				
-				Gtk.Application.Invoke (delegate {
+				foreach (VersionControlItemList list in items.SplitByRepository ()) {
+					try {
+						list [0].Repository.Lock (Monitor, list.Paths);
+					} catch (Exception ex) {
+						LoggingService.LogError ("Lock operation failed", ex);
+						Monitor.ReportError (ex.Message, null);
+						return;
+					}
+				}
+				Gtk.Application.Invoke ((o, args) => {
 					VersionControlService.NotifyFileStatusChanged (items);
 				});
 				Monitor.ReportSuccess (GettextCatalog.GetString ("Lock operation completed."));

@@ -31,20 +31,52 @@ using System;
 using MonoDevelop.Ide.Gui.Content;
 using MonoDevelop.Core;
 using MonoDevelop.Ide.Gui;
+using MonoDevelop.Ide.Editor;
+using System.Threading.Tasks;
+using MonoDevelop.Core.Text;
+using System.Linq;
 
 namespace MonoDevelop.Ide.Navigation
 {
+	[Obsolete]
 	public class TextFileNavigationPoint : DocumentNavigationPoint
 	{
 		int line;
 		int column;
-		
-		public TextFileNavigationPoint (Document doc, IEditableTextBuffer buffer)
+
+		int offset;
+		ITextSourceVersion version;
+		TextEditor buffer;
+
+		public TextFileNavigationPoint (Document doc, TextEditor buffer)
 			: base (doc)
 		{
-			buffer.GetLineColumnFromPosition (buffer.CursorPosition, out line, out column);
+			var location = buffer.CaretLocation;
+			version = buffer.Version;
+			offset = buffer.CaretOffset;
+			line = location.Line;
+			column = location.Column;
+			this.buffer = buffer;
 		}
-		
+
+		protected override void OnDocumentClosing ()
+		{
+			try {
+				// text source version becomes invalid on document close.
+				if (buffer != null) {
+					if (version.BelongsToSameDocumentAs (buffer.Version))
+						offset = version.MoveOffsetTo (buffer.Version, offset);
+					var location = buffer.CaretLocation;
+					line = location.Line;
+					column = location.Column;
+				}
+			} catch (Exception e) {
+				LoggingService.LogInternalError (e);
+			}
+			version = null;
+			buffer = null;
+		}
+
 		public TextFileNavigationPoint (FilePath file, int line, int column)
 			: base (file)
 		{
@@ -75,21 +107,39 @@ namespace MonoDevelop.Ide.Navigation
 			}
 		}
 		
-		protected override Document DoShow ()
+		protected override async Task<Document> DoShow ()
 		{
-			Document doc = base.DoShow ();
+			Document doc = await base.DoShow ();
 			if (doc != null) {
-				IEditableTextBuffer buf = doc.GetContent<IEditableTextBuffer> ();
+				var buf = doc.Editor;
 				if (buf != null) {
 					doc.DisableAutoScroll ();
 					buf.RunWhenLoaded (() => {
-						buf.SetCaretTo (Math.Max (line, 1), Math.Max (column, 1));
+						JumpToCurrentLocation (buf);
 					});
 				}
 			}
 			return doc;
 		}
-		
+
+		protected void JumpToCurrentLocation (TextEditor editor)
+		{
+			if (version != null && version.BelongsToSameDocumentAs (editor.Version)) {
+				var currentOffset = version.MoveOffsetTo (editor.Version, offset);
+				var loc = editor.OffsetToLocation (currentOffset);
+				editor.SetCaretLocation (loc);
+			} else {
+				var doc = IdeApp.Workbench.Documents.FirstOrDefault (d => d.Editor == editor);
+				if (doc != null) {
+					buffer = doc.Editor;
+					version = buffer.Version;
+					offset = buffer.LocationToOffset (line, column);
+					SetDocument (doc);
+				}
+				editor.SetCaretLocation (Math.Max (line, 1), Math.Max (column, 1));
+			}
+		}
+
 		/*
 		
 		//FIXME: this currently isn't hooked up to any GUI. In addition, it should be done lazily, since it's expensive 
@@ -156,7 +206,7 @@ namespace MonoDevelop.Ide.Navigation
 			}
 			return indent;
 		}*/
-		
+
 		public override bool Equals (object o)
 		{
 			TextFileNavigationPoint other = o as TextFileNavigationPoint;

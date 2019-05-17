@@ -28,22 +28,23 @@
 
 using System;
 using System.Collections.Generic;
+using MonoDevelop.Core;
 using MonoDevelop.Ide;
-using MonoDevelop.PackageManagement;
 using MonoDevelop.Projects;
 
-namespace ICSharpCode.PackageManagement
+namespace MonoDevelop.PackageManagement
 {
-	public class PackageManagementProjectService : IPackageManagementProjectService
+	internal class PackageManagementProjectService : IPackageManagementProjectService
 	{
 		public PackageManagementProjectService ()
 		{
-			IdeApp.Workspace.SolutionLoaded += (sender, e) => OnSolutionLoaded (e.Solution);
-			IdeApp.Workspace.SolutionUnloaded += (sender, e) => OnSolutionUnloaded (e.Solution);
+			Runtime.ServiceProvider.WhenServiceInitialized<RootWorkspace> (s => {
+				s.SolutionLoaded += (sender, e) => OnSolutionLoaded (e.Solution);
+				s.SolutionUnloaded += (sender, e) => OnSolutionUnloaded (e.Solution);
+			});
 		}
 
 		public event EventHandler SolutionLoaded;
-
 
 		void OnSolutionLoaded (Solution solution)
 		{
@@ -92,11 +93,6 @@ namespace ICSharpCode.PackageManagement
 				return OpenSolution.GetAllProjects ();
 			}
 			return new IDotNetProject [0];
-		}
-
-		public IProjectBrowserUpdater CreateProjectBrowserUpdater()
-		{
-			return new ThreadSafeProjectBrowserUpdater();
 		}
 		
 		public string GetDefaultCustomToolForFileName(ProjectFile projectItem)

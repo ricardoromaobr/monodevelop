@@ -34,12 +34,13 @@ using MonoDevelop.Core;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Ide;
 using System.Collections.Generic;
+using MonoDevelop.Components;
 
 namespace MonoDevelop.DesignerSupport
 {
 
 
-	public class DocumentOutlinePad : AbstractPadContent
+	public class DocumentOutlinePad : PadContent
 	{
 		Alignment box;
 		IOutlinedDocument currentOutlineDoc;
@@ -54,12 +55,12 @@ namespace MonoDevelop.DesignerSupport
 			box.ShowAll ();
 		}
 
-		public override void Initialize (IPadWindow window)
+		protected override void Initialize (IPadWindow window)
 		{
 			base.Initialize (window);
 			IdeApp.Workbench.ActiveDocumentChanged += DocumentChangedHandler;
 			CurrentDoc = IdeApp.Workbench.ActiveDocument;
-			toolbar = window.GetToolbar (PositionType.Top);
+			toolbar = window.GetToolbar (DockPositionType.Top);
 			toolbar.Visible = false;
 			Update ();
 		}
@@ -78,14 +79,14 @@ namespace MonoDevelop.DesignerSupport
 				if (value == currentDoc)
 					return;
 				if (currentDoc != null)
-					currentDoc.ViewChanged -= ViewChangedHandler;
+					currentDoc.ContentChanged -= ViewChangedHandler;
 				currentDoc = value;
 				if (currentDoc != null)
-					currentDoc.ViewChanged += ViewChangedHandler;
+					currentDoc.ContentChanged += ViewChangedHandler;
 			}
 		}
 
-		public override Gtk.Widget Control {
+		public override Control Control {
 			get { return box; }
 		}
 
@@ -104,7 +105,7 @@ namespace MonoDevelop.DesignerSupport
 		{
 			IOutlinedDocument outlineDoc = null;
 			if (CurrentDoc != null)
-				outlineDoc = CurrentDoc.GetContent<IOutlinedDocument> ();
+				outlineDoc = CurrentDoc.GetContent<IOutlinedDocument> (true);
 
 			if (currentOutlineDoc == outlineDoc)
 				return;

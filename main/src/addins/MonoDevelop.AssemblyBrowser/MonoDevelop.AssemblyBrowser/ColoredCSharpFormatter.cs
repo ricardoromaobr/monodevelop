@@ -23,14 +23,19 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-using ICSharpCode.NRefactory;
 
 using System;
 using System.Text;
 using ICSharpCode.Decompiler;
-using Mono.TextEditor;
 using System.Collections.Generic;
 using System.Linq;
+using MonoDevelop.Core.Text;
+using MonoDevelop.Ide.Editor;
+using ICSharpCode.Decompiler.CSharp.Syntax;
+using ICSharpCode.Decompiler.Disassembler;
+using ICSharpCode.Decompiler.Metadata;
+using System.Reflection.Metadata;
+using ICSharpCode.Decompiler.TypeSystem;
 
 namespace MonoDevelop.AssemblyBrowser
 {
@@ -45,7 +50,9 @@ namespace MonoDevelop.AssemblyBrowser
 			get;
 			set;
 		}
-		
+		public bool IsLocal { get; set; }
+		public bool IsLocalTarget { get; set; }
+
 		public ReferenceSegment (int offset, int length, object reference)
 		{
 			this.Reference = reference;
@@ -75,18 +82,37 @@ namespace MonoDevelop.AssemblyBrowser
 			return referenceSegment.Segment;
 		}
 	}
-	
-		
+
+	sealed class DefinitionLookup
+	{
+		internal Dictionary<object, int> definitions = new Dictionary<object, int> ();
+
+		public int GetDefinitionPosition (object definition)
+		{
+			if (!definitions.TryGetValue (definition, out int val))
+				val = -1;
+
+			return val;
+		}
+
+		public void AddDefinition (object definition, int offset)
+		{
+			definitions [definition] = offset;
+		}
+	}
+
+
 	class ColoredCSharpFormatter : ICSharpCode.Decompiler.ITextOutput
 	{
 		public StringBuilder sb = new StringBuilder();
-		TextDocument doc;
+		TextEditor doc;
 		bool write_indent;
 		int indent;
-		public List<FoldSegment>      FoldSegments       = new List<FoldSegment>();
+		public List<IFoldSegment>     FoldSegments       = new List<IFoldSegment>();
 		public List<ReferenceSegment> ReferencedSegments = new List<ReferenceSegment>();
-		
-		public ColoredCSharpFormatter (TextDocument doc)
+		internal readonly DefinitionLookup DefinitionLookup = new DefinitionLookup ();
+
+		public ColoredCSharpFormatter (TextEditor doc)
 		{
 			this.doc = doc;
 		}
@@ -94,7 +120,7 @@ namespace MonoDevelop.AssemblyBrowser
 		public void SetDocumentData ()
 		{
 			doc.Text = sb.ToString ();
-			doc.UpdateFoldSegments (FoldSegments, false);
+			doc.SetFoldings (FoldSegments);
 		}
 		
 		#region ITextOutput implementation
@@ -127,27 +153,63 @@ namespace MonoDevelop.AssemblyBrowser
 			sb.Append (ch);
 		}
 
-		void ITextOutput.Write (string text)
+		public void Write (string text)
 		{
 			WriteIndent ();
 			sb.Append (text);
 		}
 
-		void ITextOutput.WritePrimitiveValue (object value, string literalValue)
+		public void WriteReference (OpCodeInfo opCode)
 		{
 			WriteIndent ();
-			if (value == null) {
-				sb.Append ("null");
-			} else if (value is string) {
-				sb.Append ("\"" + value + "\"");
-			} else if (value is char) {
-				sb.Append ("'" + value + "'");
-			} else if (value is bool) {
-				sb.Append ((bool)value ? "true" : "false");
-			} else {
-				sb.Append (value.ToString());
+			ReferencedSegments.Add (new ReferenceSegment (sb.Length, opCode.Name.Length, opCode));
+			sb.Append (opCode.Name);
+		}
+
+		public void WriteReference (PEFile module, EntityHandle handle, string text, bool isDefinition = false)
+		{
+			WriteIndent ();
+			if (isDefinition) {
+				this.DefinitionLookup.AddDefinition ((module, handle), sb.Length);
 			}
 
+			ReferencedSegments.Add (new ReferenceSegment (sb.Length, text.Length, (module, handle)));
+			sb.Append (text);
+		}
+
+		public void WriteReference (IType type, string text, bool isDefinition = false)
+		{
+			WriteIndent ();
+			if (isDefinition) {
+				this.DefinitionLookup.AddDefinition (type, sb.Length);
+			}
+
+			ReferencedSegments.Add (new ReferenceSegment (sb.Length, text.Length, type));
+			sb.Append (text);
+		}
+
+		public void WriteReference (IMember member, string text, bool isDefinition = false)
+		{
+			WriteIndent ();
+			if (isDefinition) {
+				this.DefinitionLookup.AddDefinition (member, sb.Length);
+			}
+			ReferencedSegments.Add (new ReferenceSegment (sb.Length, text.Length, member));
+			sb.Append (text);
+		}
+
+		public void WriteLocalReference (string text, object reference, bool isDefinition)
+		{
+			WriteIndent ();
+
+			bool isLocalTarget = false;
+			if (isDefinition) {
+				this.DefinitionLookup.AddDefinition (reference, sb.Length);
+				isLocalTarget = true;
+			}
+
+			ReferencedSegments.Add (new ReferenceSegment (sb.Length, text.Length, reference) { IsLocal = true, IsLocalTarget = isLocalTarget });
+			sb.Append (text);
 		}
 
 		void WriteIndent ()
@@ -172,10 +234,6 @@ namespace MonoDevelop.AssemblyBrowser
 			sb.Append (text);
 		}
 
-		public void AddDebugSymbols (MethodDebugSymbols methodDebugSymbols)
-		{
-		}
-
 		public void WriteReference (string text, object reference, bool isLocal)
 		{
 			WriteIndent ();
@@ -193,9 +251,8 @@ namespace MonoDevelop.AssemblyBrowser
 		public void MarkFoldEnd ()
 		{
 			var curFold = foldSegmentStarts.Pop ();
-			FoldSegments.Add (new FoldSegment (doc, curFold.Item2 ,curFold.Item1, sb.Length - curFold.Item1, FoldingType.None) {
-				IsFolded = curFold.Item3
-			});
+			var seg = FoldSegmentFactory.CreateFoldSegment (doc, curFold.Item1, sb.Length - curFold.Item1, curFold.Item3, curFold.Item2);
+			FoldSegments.Add (seg);
 		}
 		#endregion
 		

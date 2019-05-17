@@ -26,80 +26,81 @@
 
 using System;
 using System.Collections.Generic;
-using ICSharpCode.PackageManagement;
+using System.Threading.Tasks;
 using MonoDevelop.Core;
-using MonoDevelop.Ide;
-using NuGet;
 
 namespace MonoDevelop.PackageManagement.Tests.Helpers
 {
-	public class TestableBackgroundPackageActionRunner : BackgroundPackageActionRunner
+	class TestableBackgroundPackageActionRunner : BackgroundPackageActionRunner
 	{
-		public List<MessageHandler> BackgroundDispatchersQueued = new List<MessageHandler> ();
+		public Queue<Action> BackgroundActionsQueued = new Queue<Action> ();
 
 		public TestableBackgroundPackageActionRunner (
 			IPackageManagementProgressMonitorFactory progressMonitorFactory,
 			IPackageManagementEvents packageManagementEvents,
-			IProgressProvider progressProvider)
-			: base (progressMonitorFactory, packageManagementEvents, progressProvider)
+			PackageManagementInstrumentationService instrumentationService)
+			: base (
+				progressMonitorFactory,
+				packageManagementEvents,
+				instrumentationService)
 		{
 			Init ();
 		}
 
 		void Init ()
 		{
-			CreateEventMonitorAction = (monitor, packageManagementEvents, progressProvider) => {
-				EventsMonitor = new TestablePackageManagementEventsMonitor (monitor, packageManagementEvents, progressProvider);
+			CreateEventMonitorAction = (monitor, packageManagementEvents, completionSource) => {
+				EventsMonitor = new TestablePackageManagementEventsMonitor (monitor, packageManagementEvents, completionSource);
 				return EventsMonitor;
 			};
 		}
 
 		public void ExecuteSingleBackgroundDispatch ()
 		{
-			BackgroundDispatchersQueued [0].Invoke ();
-			BackgroundDispatchersQueued.RemoveAt (0);
+			var action = BackgroundActionsQueued.Dequeue ();
+			action.Invoke ();
 		}
 
 		public void ExecuteBackgroundDispatch ()
 		{
-			foreach (MessageHandler dispatcher in BackgroundDispatchersQueued) {
-				dispatcher.Invoke ();
-			}
-			BackgroundDispatchersQueued.Clear ();
-		}
-
-		protected override void BackgroundDispatch (MessageHandler handler)
-		{
-			BackgroundDispatchersQueued.Add (handler);
-		}
-
-		public bool InvokeBackgroundDispatchAndWaitImmediately = true;
-
-		protected override void BackgroundDispatchAndWait (MessageHandler handler)
-		{
-			if (InvokeBackgroundDispatchAndWaitImmediately) {
-				handler.Invoke ();
-			} else {
-				BackgroundDispatchersQueued.Add (handler);
+			while (BackgroundActionsQueued.Count > 0) {
+				ExecuteSingleBackgroundDispatch ();
 			}
 		}
 
-		protected override void GuiDispatch (MessageHandler handler)
+		protected override void BackgroundDispatch (Action action)
 		{
-			handler.Invoke ();
+			BackgroundActionsQueued.Enqueue (action);
 		}
 
-		public Func<IProgressMonitor,
+		protected override void GuiDispatch (Action action)
+		{
+			action ();
+		}
+
+		protected override void ClearDispatcher ()
+		{
+			BackgroundActionsQueued.Clear ();
+		}
+
+		public bool DispatcherIsDispatchingReturns;
+
+		protected override bool DispatcherIsDispatching ()
+		{
+			return DispatcherIsDispatchingReturns;
+		}
+
+		public Func<ProgressMonitor,
 			IPackageManagementEvents,
-			IProgressProvider,
+			TaskCompletionSource<bool>,
 			PackageManagementEventsMonitor> CreateEventMonitorAction;
 
 		protected override PackageManagementEventsMonitor CreateEventMonitor (
-			IProgressMonitor monitor,
+			ProgressMonitor monitor,
 			IPackageManagementEvents packageManagementEvents,
-			IProgressProvider progressProvider)
+			TaskCompletionSource<bool> taskCompletionSource)
 		{
-			return CreateEventMonitorAction (monitor, packageManagementEvents, progressProvider);
+			return CreateEventMonitorAction (monitor, packageManagementEvents, taskCompletionSource);
 		}
 
 		public TestablePackageManagementEventsMonitor EventsMonitor;

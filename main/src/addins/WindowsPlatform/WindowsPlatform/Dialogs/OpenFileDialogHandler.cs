@@ -1,4 +1,4 @@
-// 
+﻿// 
 // OpenFileDialogHandler.cs
 //  
 // Authors:
@@ -34,14 +34,15 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.WindowsAPICodePack.Dialogs;
 using Microsoft.WindowsAPICodePack.Dialogs.Controls;
+using MonoDevelop.Components;
 using MonoDevelop.Core;
+using MonoDevelop.Components.Extensions;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.Extensions;
 using MonoDevelop.Ide.Gui;
 using MonoDevelop.Projects.Text;
 using Microsoft.WindowsAPICodePack.Shell;
 using System.Windows;
-using Gtk;
 
 namespace MonoDevelop.Platform
 {
@@ -158,18 +159,21 @@ namespace MonoDevelop.Platform
 			IShellItemArray resultsArray;
 			uint count;
 
-			try {
-				nativeDialog.GetSelectedItems (out resultsArray);
-			} catch (COMException ex) {
+			var hr = nativeDialog.GetSelectedItems(out resultsArray);
+			if (hr != 0) {
+				var e = Marshal.GetExceptionForHR(hr);
+
 				//we get E_FAIL when there is no selection
-				if (ex != null && ex.ErrorCode == -2147467259)
+				if (hr == -2147467259) {
 					return filenames;
-				throw;
-			} catch (FileNotFoundException) {
-				return filenames;
+				} else if (e is FileNotFoundException) {
+					return filenames;
+				}
+
+				throw e;
 			}
 
-			var hr = (int)resultsArray.GetCount (out count);
+			hr = (int)resultsArray.GetCount (out count);
 			if (hr != 0)
 				throw Marshal.GetExceptionForHR (hr);
 
@@ -195,7 +199,7 @@ namespace MonoDevelop.Platform
 
 			foreach (var e in TextEncoding.ConversionEncodings) {
 				combo.Items.Add (new EncodingComboItem (Encoding.GetEncoding (e.CodePage), string.Format ("{0} ({1})", e.Name, e.Id)));
-				if (selectedEncoding != null && e.CodePage == selectedEncoding.WindowsCodePage)
+				if (selectedEncoding != null && e.CodePage == selectedEncoding.CodePage)
 					combo.SelectedIndex = i;
 				i++;
 			}
@@ -229,19 +233,46 @@ namespace MonoDevelop.Platform
 				return false;
 			}
 
+			int selected = -1;
+			int i = 0;
 			bool hasBench = false;
-			var projectService = IdeApp.Services.ProjectService;
+			var projectService = IdeServices.ProjectService;
 			if (projectService.IsWorkspaceItemFile (fileName) || projectService.IsSolutionItemFile (fileName)) {
 				hasBench = true;
 				combo.Items.Add (new ViewerComboItem (null, GettextCatalog.GetString ("Solution Workbench")));
+				if (!CanBeOpenedInAssemblyBrowser (fileName))
+					selected = 0;
+				i++;
 			}
 
-			foreach (var vw in DisplayBindingService.GetFileViewers (fileName, null))
-				if (!vw.IsExternal)
+			foreach (var vw in IdeServices.DisplayBindingService.GetFileViewers (fileName, null).Result)
+				if (!vw.IsExternal) {
 					combo.Items.Add (new ViewerComboItem (vw, vw.Title));
 
+					if (vw.CanUseAsDefault && selected == -1)
+						selected = i;
+
+					i++;
+				}
+
+			if (selected == -1)
+				selected = 0;
+
 			combo.Enabled = combo.Items.Count >= 1;
+			if (selected > 0) {
+				// Unable to set SelectedIndex until ApplyControlPropertyChange called for Items
+				// which causes the combo box selection to visibly change selection twice. Instead just
+				// make the default item the first one in the combo.
+				var item = combo.Items[selected];
+				combo.Items.RemoveAt (selected);
+				combo.Items.Insert (0, item);
+			}
 			return hasBench;
+		}
+
+		static bool CanBeOpenedInAssemblyBrowser (FilePath filename)
+		{
+			return filename.Extension.ToLower () == ".exe" || filename.Extension.ToLower () == ".dll";
 		}
 
 		class ViewerComboItem : CommonFileDialogComboBoxItem

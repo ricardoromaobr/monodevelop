@@ -25,13 +25,13 @@
 // THE SOFTWARE.
 
 using MonoDevelop.Ide.Gui.Components;
-using ICSharpCode.NRefactory.TypeSystem;
+using ICSharpCode.Decompiler.TypeSystem;
 using System;
-using Mono.Cecil;
-using ICSharpCode.NRefactory.TypeSystem.Implementation;
+using ICSharpCode.Decompiler.TypeSystem.Implementation;
 using MonoDevelop.Core;
 using MonoDevelop.Projects;
 using MonoDevelop.Ide.TypeSystem;
+using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 
 namespace MonoDevelop.AssemblyBrowser
 {
@@ -41,17 +41,17 @@ namespace MonoDevelop.AssemblyBrowser
 			get; 
 			private set; 
 		}
-		
-		protected MonoDevelop.Ide.TypeSystem.Ambience Ambience {
+		readonly static CSharpAmbience ambience = new CSharpAmbience ();
+
+		protected CSharpAmbience Ambience {
 			get {
-				return Widget.Ambience; 
+				return ambience; 
 			}
 		}
 		
-		internal CecilLoader CecilLoader {
-			get {
-				return Widget.CecilLoader;
-			}
+		internal AssemblyLoader GetCecilLoader (ITreeNavigator navigator)
+		{
+			return navigator.GetParentDataItem<AssemblyLoader> (false);
 		}
 		
 		public override int CompareObjects (ITreeNavigator thisNode, ITreeNavigator otherNode)
@@ -59,27 +59,14 @@ namespace MonoDevelop.AssemblyBrowser
 			try {
 				if (thisNode == null || otherNode == null)
 					return -1;
-				var e1 = thisNode.DataItem as IUnresolvedEntity;
-				var e2 = otherNode.DataItem as IUnresolvedEntity;
-				
-				if (e1 == null && e2 == null)
-					return 0;
-				if (e1 == null)
-					return -1;
-				if (e2 == null)
-					return 1;
-				
-				if (e1.SymbolKind != e2.SymbolKind)
-					return e2.SymbolKind.CompareTo (e1.SymbolKind);
-				
-				return e1.Name.CompareTo (e2.Name);
+				return string.Compare (thisNode.NodeName, otherNode.NodeName, StringComparison.OrdinalIgnoreCase);
 			} catch (Exception e) {
 				LoggingService.LogError ("Exception in assembly browser sort function.", e);
 				return -1;
 			}
 		}
 		
-		public AssemblyBrowserTypeNodeBuilder (AssemblyBrowserWidget assemblyBrowserWidget)
+		protected AssemblyBrowserTypeNodeBuilder (AssemblyBrowserWidget assemblyBrowserWidget)
 		{
 			this.Widget = assemblyBrowserWidget;
 		}
@@ -89,42 +76,5 @@ namespace MonoDevelop.AssemblyBrowser
 			return treeBuilder.GetParentDataItem (typeof(AssemblyLoader), true) != null;
 		}
 
-		protected IUnresolvedAssembly GetMainAssembly (ITreeNavigator treeBuilder)
-		{
-			var loader = (AssemblyLoader)treeBuilder.GetParentDataItem (typeof(AssemblyLoader), true);
-			if (loader != null)
-				return loader.UnresolvedAssembly;
-			return null;
-		}
-
-		protected ITypeResolveContext GetContext (ITreeNavigator treeBuilder)
-		{
-			var mainAssembly = GetMainAssembly (treeBuilder);
-			if (mainAssembly != null) {
-				var simpleCompilation = new SimpleCompilation (mainAssembly);
-				return new SimpleTypeResolveContext (simpleCompilation.MainAssembly);
-			}
-			var project = (Project)treeBuilder.GetParentDataItem (typeof(Project), true);
-			var compilation = TypeSystemService.GetCompilation (project);
-			return new SimpleTypeResolveContext (compilation.MainAssembly);
-		}
-		
-		protected IMember Resolve (ITreeNavigator treeBuilder, IUnresolvedMember member, ITypeDefinition currentType = null)
-		{
-			var ctx = GetContext (treeBuilder);
-			return member.CreateResolved (currentType != null ? ctx.WithCurrentTypeDefinition (currentType) : ctx);
-		}
-		
-		protected IType Resolve (ITreeNavigator treeBuilder, IUnresolvedTypeDefinition type)
-		{
-			var mainAssembly = GetMainAssembly (treeBuilder);
-			if (mainAssembly != null) {
-				var simpleCompilation = new SimpleCompilation (mainAssembly);
-				return type.Resolve (new SimpleTypeResolveContext (simpleCompilation.MainAssembly));
-			}
-			var project = (Project)treeBuilder.GetParentDataItem (typeof(Project), true);
-			var ctx = TypeSystemService.GetCompilation (project);
-			return ctx.MainAssembly.GetTypeDefinition (type.Namespace, type.Name, type.TypeParameters.Count);
-		}
 	}
 }

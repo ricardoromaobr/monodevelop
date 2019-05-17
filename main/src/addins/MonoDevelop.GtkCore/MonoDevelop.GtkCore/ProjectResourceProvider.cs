@@ -1,4 +1,4 @@
-//
+﻿//
 // ProjectResourceProvider.cs
 //
 // Author:
@@ -48,7 +48,7 @@ namespace MonoDevelop.GtkCore
 			ArrayList list = new ArrayList ();
 			foreach (ProjectFile file in project.Files) {
 				if (file.BuildAction == BuildAction.EmbeddedResource)
-					list.Add (new Stetic.ResourceInfo (file.ResourceId, file.Name, DesktopService.GetMimeTypeForUri (file.Name)));
+					list.Add (new Stetic.ResourceInfo (file.ResourceId, file.Name, IdeServices.DesktopService.GetMimeTypeForUri (file.Name)));
 			}
 			return (Stetic.ResourceInfo[]) list.ToArray (typeof(Stetic.ResourceInfo));
 		}
@@ -65,7 +65,7 @@ namespace MonoDevelop.GtkCore
 		public Stetic.ResourceInfo AddResource (string fileName)
 		{
 			ProjectFile file = project.AddFile (fileName, BuildAction.EmbeddedResource);
-			IdeApp.ProjectOperations.Save (project);
+			IdeApp.ProjectOperations.SaveAsync (project);
 			return new Stetic.ResourceInfo (file.ResourceId, fileName);
 		}
 		
@@ -74,7 +74,7 @@ namespace MonoDevelop.GtkCore
 			foreach (ProjectFile file in project.Files) {
 				if (resourceName == file.ResourceId) {
 					project.Files.Remove (file);
-					IdeApp.ProjectOperations.Save (project);
+					IdeApp.ProjectOperations.SaveAsync (project);
 					return;
 				}
 			}

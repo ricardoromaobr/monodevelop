@@ -1,4 +1,4 @@
-//
+﻿//
 // GuiBuilderDisplayBinding.cs
 //
 // Author:
@@ -30,14 +30,21 @@ using MonoDevelop.Ide.Gui;
 using MonoDevelop.Projects;
 using MonoDevelop.Ide;
 using MonoDevelop.Ide.TypeSystem;
-
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using System.Linq;
+using Microsoft.CodeAnalysis.CSharp;
+using System;
+using ICSharpCode.NRefactory6.CSharp;
+using MonoDevelop.Ide.Gui.Documents;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using System.Collections.Immutable;
 
 namespace MonoDevelop.GtkCore.GuiBuilder
 {
-	public class GuiBuilderDisplayBinding : IViewDisplayBinding
+	[ExportDocumentControllerFactory (FileExtension = ".cs", InsertBefore = "DefaultDisplayBinding")]
+	public class GuiBuilderDisplayBinding : FileDocumentControllerFactory
 	{
-		bool excludeThis = false;
-		
 		public string Name {
 			get { return MonoDevelop.Core.GettextCatalog.GetString ("Window Designer"); }
 		}
@@ -45,60 +52,66 @@ namespace MonoDevelop.GtkCore.GuiBuilder
 		public bool CanUseAsDefault {
 			get { return true; }
 		}
-		
-		public bool CanHandle (MonoDevelop.Core.FilePath fileName, string mimeType, Project ownerProject)
+
+		protected override async Task<IEnumerable<DocumentControllerDescription>> GetSupportedControllersAsync (FileDescriptor file)
 		{
-			if (excludeThis)
-				return false;
-			
-			if (fileName.IsNullOrEmpty)
-				return false;
-			
-			if (GetWindow (fileName) == null)
-				return false;
-			
-			excludeThis = true;
-			var db = DisplayBindingService.GetDefaultViewBinding (fileName, mimeType, ownerProject);
-			excludeThis = false;
-			return db != null;
+			var list = ImmutableList<DocumentControllerDescription>.Empty;
+
+			if (file.FilePath.IsNullOrEmpty || !(file.Owner is DotNetProject))
+				return list;
+
+			if (!IdeApp.Workspace.IsOpen)
+				return list;
+
+			if (GetWindow (file.FilePath, (DotNetProject)file.Owner) == null)
+				return list;
+
+			list = list.Add (
+				new DocumentControllerDescription {
+					CanUseAsDefault = true,
+					Role = DocumentControllerRole.VisualDesign,
+					Name = MonoDevelop.Core.GettextCatalog.GetString ("Window Designer")
+				});
+
+			return list;
 		}
-		
-		public IViewContent CreateContent (MonoDevelop.Core.FilePath fileName, string mimeType, Project ownerProject)
+
+		public override async Task<DocumentController> CreateController (FileDescriptor file, DocumentControllerDescription controllerDescription)
 		{
-			excludeThis = true;
-			var db = DisplayBindingService.GetDefaultViewBinding (fileName, mimeType, ownerProject);
-			var content = db.CreateContent (fileName, mimeType, ownerProject);
-			GuiBuilderView view = new GuiBuilderView (content, GetWindow (fileName));
-			excludeThis = false;
+			var window = GetWindow (file.FilePath, (Project)file.Owner);
+			if (window == null)
+				throw new InvalidOperationException ("GetWindow == null");
+			var view = new GuiBuilderView (window);
 			return view;
 		}
 		
-		internal static GuiBuilderWindow GetWindow (string file)
+		internal static GuiBuilderWindow GetWindow (string file, Project project)
 		{
 			if (!IdeApp.Workspace.IsOpen)
 				return null;
-
-			Project project = null;
-			foreach (Project p in IdeApp.Workspace.GetAllProjects ()) {
-				if (p.IsFileInProject (file)) {
-					project = p;
-					break;
-				}
-			}
-			
 			if (!GtkDesignInfo.HasDesignedObjects (project))
 				return null;
-
 			GtkDesignInfo info = GtkDesignInfo.FromProject (project);
 			if (file.StartsWith (info.GtkGuiFolder))
 				return null;
-			
-			var doc = TypeSystemService.ParseFile (project, file);
+			var docId = IdeApp.TypeSystemService.GetDocumentId (project, file);
+			if (docId == null)
+				return null;
+			var doc = IdeApp.TypeSystemService.GetCodeAnalysisDocument (docId);
 			if (doc == null)
 				return null;
-
-			foreach (var t in doc.TopLevelTypeDefinitions) {
-				GuiBuilderWindow win = info.GuiBuilderProject.GetWindowForClass (t.FullName);
+			Microsoft.CodeAnalysis.SemanticModel semanticModel;
+			try {
+				semanticModel = doc.GetSemanticModelAsync ().Result;
+			} catch {
+				return null;
+			}
+			if (semanticModel == null)
+				return null;
+			var root = semanticModel.SyntaxTree.GetRoot ();
+			foreach (var classDeclaration in root.DescendantNodesAndSelf (child => !(child is BaseTypeDeclarationSyntax)).OfType<ClassDeclarationSyntax> ()) {
+				var c = semanticModel.GetDeclaredSymbol (classDeclaration);
+				GuiBuilderWindow win = info.GuiBuilderProject.GetWindowForClass (c.ToDisplayString (Microsoft.CodeAnalysis.SymbolDisplayFormat.CSharpErrorMessageFormat));
 				if (win != null)
 					return win;
 			}

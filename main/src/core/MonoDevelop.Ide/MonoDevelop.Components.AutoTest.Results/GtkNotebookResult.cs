@@ -32,10 +32,9 @@ namespace MonoDevelop.Components.AutoTest.Results
 	public class GtkNotebookResult : GtkWidgetResult
 	{
 		Notebook noteBook;
-		Label toBeSelectedLabel;
 		int toBeSelected = -1;
 
-		public GtkNotebookResult (Widget notebookWidget) : base (notebookWidget)
+		internal GtkNotebookResult (Widget notebookWidget) : base (notebookWidget)
 		{
 			noteBook = notebookWidget as Notebook;
 		}
@@ -51,7 +50,6 @@ namespace MonoDevelop.Components.AutoTest.Results
 				var iTab = noteBook.GetNthPage (i);
 				var label = noteBook.GetTabLabelText (iTab);
 				if (CheckForText (label, text, exact)) {
-					toBeSelectedLabel = noteBook.GetTabLabel (iTab) as Label;
 					toBeSelected = i;
 					return this;
 				}
@@ -61,7 +59,7 @@ namespace MonoDevelop.Components.AutoTest.Results
 
 		public override AppResult Selected ()
 		{
-			if (base.Selected () != null) {
+			if (toBeSelected >= 0) {
 				return noteBook.CurrentPage == toBeSelected ? this : null;
 			}
 			return null;
@@ -74,6 +72,12 @@ namespace MonoDevelop.Components.AutoTest.Results
 				return true;
 			}
 			return false;
+		}
+
+		protected override void Dispose (bool disposing)
+		{
+			noteBook = null;
+			base.Dispose (disposing);
 		}
 	}
 }

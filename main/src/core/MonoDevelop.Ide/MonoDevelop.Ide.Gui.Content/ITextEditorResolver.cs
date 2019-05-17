@@ -26,39 +26,30 @@
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 
-using System;
 using System.Collections.Generic;
 using System.Linq;
-using Mono.TextEditor;
 using Mono.Addins;
-using ICSharpCode.NRefactory.TypeSystem;
-using ICSharpCode.NRefactory.Semantics;
-using MonoDevelop.Ide.TypeSystem;
+using Microsoft.CodeAnalysis;
+using MonoDevelop.Ide.Editor;
+using System;
 
 namespace MonoDevelop.Ide.Gui.Content
 {
+	[Obsolete ("Use the Microsoft.VisualStudio.Text.Editor APIs")]
 	public interface ITextEditorResolver
 	{
-		ResolveResult GetLanguageItem (int offset);
-		ResolveResult GetLanguageItem (int offset, string expression);
+		ISymbol GetLanguageItem (int offset);
+		ISymbol GetLanguageItem (int offset, string expression);
 	}
 	
+	[Obsolete ("Use the Microsoft.VisualStudio.Text.Editor APIs")]
 	public interface ITextEditorResolverProvider
 	{
-		ResolveResult GetLanguageItem (MonoDevelop.Ide.Gui.Document document, int offset, out DomRegion expressionRegion);
-		ResolveResult GetLanguageItem (MonoDevelop.Ide.Gui.Document document, int offset, string identifier);
-
-		string CreateTooltip (MonoDevelop.Ide.Gui.Document document, int offset, ResolveResult result, string errorInformations, Gdk.ModifierType modifierState);
-
+		ISymbol GetLanguageItem (Document document, int offset, out DocumentRegion expressionRegion);
+		ISymbol GetLanguageItem (Document document, int offset, string identifier);
 	}
-	
-	public interface ITextEditorMemberPositionProvider
-	{
-		IUnresolvedTypeDefinition GetTypeAt (int offset);
-		IUnresolvedMember GetMemberAt (int offset);
-	}
-	
-	
+
+	[Obsolete ("Use the Microsoft.VisualStudio.Text.Editor APIs")]
 	public static class TextEditorResolverService
 	{
 		static List<TextEditorResolverProviderCodon> providers = new List<TextEditorResolverProviderCodon> ();
@@ -85,21 +76,22 @@ namespace MonoDevelop.Ide.Gui.Content
 			return codon.CreateResolver ();
 		}
 
-		public static ResolveResult GetLanguageItem (this MonoDevelop.Ide.Gui.Document document, int offset, out DomRegion expressionRegion)
+		public static ISymbol GetLanguageItem (this Document document, int offset, out DocumentRegion expressionRegion)
 		{
 			if (document == null)
 				throw new System.ArgumentNullException ("document");
 
-			var textEditorResolver = TextEditorResolverService.GetProvider (document.Editor.Document.MimeType);
+			var textEditorResolver = TextEditorResolverService.GetProvider (document.Editor.MimeType);
 			if (textEditorResolver != null) {
 				return textEditorResolver.GetLanguageItem (document, offset, out expressionRegion);
 			}
-			expressionRegion = DomRegion.Empty;
+			expressionRegion = DocumentRegion.Empty;
 			return null;
 		}
 	}
 	
 	[ExtensionNode (Description="A codon for text editor providers.")]
+	[Obsolete ("Use the Microsoft.VisualStudio.Text.Editor APIs")]
 	public class TextEditorResolverProviderCodon : ExtensionNode
 	{
 		[NodeAttribute("mimeType", "Mime type for this text editor provider")]

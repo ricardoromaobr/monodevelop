@@ -1,4 +1,4 @@
-// 
+﻿// 
 // RefactoringPreviewDialog.cs
 //  
 // Author:
@@ -30,10 +30,10 @@ using Gtk;
 using Gdk;
 
 using MonoDevelop.Core;
-using Mono.TextEditor;
 using MonoDevelop.Ide;
-using ICSharpCode.NRefactory.TypeSystem;
 using MonoDevelop.Components;
+using MonoDevelop.Ide.Editor;
+using MonoDevelop.Core.Text;
 using MonoDevelop.Ide.Fonts;
 
 
@@ -48,13 +48,14 @@ namespace MonoDevelop.Refactoring
 		const int objColumn = 2;
 		const int statusVisibleColumn = 3;
 
-		List<Change> changes;
+		IList<Change> changes;
 
-		public RefactoringPreviewDialog (List<Change> changes)
+		public RefactoringPreviewDialog (IList<Change> changes)
 		{
 			this.Build ();
 			this.changes = changes;
 			treeviewPreview.Model = store;
+			treeviewPreview.SearchColumn = -1; // disable the interactive search
 
 			TreeViewColumn column = new TreeViewColumn ();
 
@@ -87,7 +88,7 @@ namespace MonoDevelop.Refactoring
 			};
 			
 			buttonOk.Clicked += delegate {
-				IProgressMonitor monitor = IdeApp.Workbench.ProgressMonitors.GetBackgroundProgressMonitor (this.Title, null);
+				ProgressMonitor monitor = IdeApp.Workbench.ProgressMonitors.GetBackgroundProgressMonitor (this.Title, null);
 				RefactoringService.AcceptChanges (monitor, changes);
 				
 				Destroy ();
@@ -107,9 +108,9 @@ namespace MonoDevelop.Refactoring
 				return;
 			}
 			
-			Mono.TextEditor.TextDocument doc = new Mono.TextEditor.TextDocument ();
-			doc.Text = Mono.TextEditor.Utils.TextFileUtility.ReadAllText (replaceChange.FileName);
-			DocumentLocation loc = doc.OffsetToLocation (replaceChange.Offset);
+			var doc = TextEditorFactory.CreateNewDocument ();
+			doc.Text = TextFileUtility.ReadAllText (replaceChange.FileName);
+			var loc = doc.OffsetToLocation (replaceChange.Offset);
 			
 			string text = string.Format (GettextCatalog.GetString ("(Line:{0}, Column:{1})"), loc.Line, loc.Column);
 			if (treeviewPreview.Selection.IterIsSelected (iter)) {
@@ -136,21 +137,21 @@ namespace MonoDevelop.Refactoring
 					return;
 			
 				var openDocument = IdeApp.Workbench.GetDocument (replaceChange.FileName);
-				Mono.TextEditor.TextDocument originalDocument = new Mono.TextEditor.TextDocument ();
+				var originalDocument = TextEditorFactory.CreateNewDocument ();
 				originalDocument.FileName = replaceChange.FileName;
 				if (openDocument == null) {
-					originalDocument.Text = Mono.TextEditor.Utils.TextFileUtility.ReadAllText (replaceChange.FileName);
+					originalDocument.Text = TextFileUtility.ReadAllText (replaceChange.FileName);
 				} else {
-					originalDocument.Text = openDocument.Editor.Document.Text;
+					originalDocument.Text = openDocument.Editor.Text;
 				}
 				
-				Mono.TextEditor.TextDocument changedDocument = new Mono.TextEditor.TextDocument ();
+				var changedDocument = TextEditorFactory.CreateNewDocument ();
 				changedDocument.FileName = replaceChange.FileName;
 				changedDocument.Text = originalDocument.Text;
 				
-				changedDocument.Replace (replaceChange.Offset, replaceChange.RemovedChars, replaceChange.InsertedText);
-				
-				string diffString = Mono.TextEditor.Utils.Diff.GetDiffString (originalDocument, changedDocument);
+				changedDocument.ReplaceText (replaceChange.Offset, replaceChange.RemovedChars, replaceChange.InsertedText);
+
+				string diffString = originalDocument.GetDiffAsString (changedDocument);
 				
 				cellRendererDiff.InitCell (treeviewPreview, true, diffString, replaceChange.FileName);
 			} catch (Exception e) {
@@ -167,7 +168,7 @@ namespace MonoDevelop.Refactoring
 			
 			TreeIter result;
 			if (!fileDictionary.TryGetValue (replaceChange.FileName, out result))
-				fileDictionary[replaceChange.FileName] = result = store.AppendValues (DesktopService.GetIconForFile (replaceChange.FileName, IconSize.Menu), System.IO.Path.GetFileName (replaceChange.FileName), null, true);
+				fileDictionary[replaceChange.FileName] = result = store.AppendValues (IdeServices.DesktopService.GetIconForFile (replaceChange.FileName, IconSize.Menu), System.IO.Path.GetFileName (replaceChange.FileName), null, true);
 			return result;
 		}
 
@@ -259,7 +260,7 @@ namespace MonoDevelop.Refactoring
 				layout = new Pango.Layout (container.PangoContext);
 				layout.SingleParagraphMode = false;
 				if (diffMode) {
-					layout.FontDescription = FontService.MonospaceFont;
+					layout.FontDescription = IdeServices.FontService.MonospaceFont;
 					layout.SetText (text);
 				} else {
 					layout.SetMarkup (text);

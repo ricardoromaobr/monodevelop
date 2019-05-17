@@ -1,21 +1,21 @@
-// 
+//
 // CSharpFormatter.cs
-//  
+//
 // Author:
 //       Mike Krüger <mkrueger@novell.com>
-// 
+//
 // Copyright (c) 2009 Novell, Inc (http://www.novell.com)
-// 
+//
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -23,23 +23,37 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using System.Collections.Generic;
-
-
-using Mono.TextEditor;
-using MonoDevelop.CSharp.Formatting;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Editor;
+using Microsoft.CodeAnalysis.Formatting;
+using Microsoft.CodeAnalysis.Formatting.Rules;
+using Microsoft.CodeAnalysis.Options;
+using Microsoft.CodeAnalysis.Shared.Extensions;
+using Microsoft.CodeAnalysis.Text;
+using MonoDevelop.Core;
+using MonoDevelop.Ide;
+using MonoDevelop.Core.Text;
+using MonoDevelop.CSharp.OptionProvider;
+using MonoDevelop.Ide.CodeFormatting;
+using MonoDevelop.Ide.Completion.Presentation;
+using MonoDevelop.Ide.Editor;
 using MonoDevelop.Ide.Gui.Content;
 using MonoDevelop.Projects.Policies;
+using Roslyn.Utilities;
+using Microsoft.CodeAnalysis.Options;
+using MonoDevelop.CSharp.OptionProvider;
+using Microsoft.VisualStudio.CodingConventions;
 using System.Linq;
-using MonoDevelop.Ide.CodeFormatting;
-using ICSharpCode.NRefactory.CSharp;
-using MonoDevelop.Core;
-using MonoDevelop.CSharp.Refactoring;
+using System.Collections.Immutable;
 
 namespace MonoDevelop.CSharp.Formatting
 {
-	class CSharpFormatter : AbstractAdvancedFormatter
+	class CSharpFormatter : AbstractCodeFormatter
 	{
 		static internal readonly string MimeType = "text/x-csharp";
 
@@ -47,110 +61,164 @@ namespace MonoDevelop.CSharp.Formatting
 
 		public override bool SupportsCorrectingIndent { get { return true; } }
 
-		public override void CorrectIndenting (PolicyContainer policyParent, IEnumerable<string> mimeTypeChain, 
-			TextEditorData data, int line)
+		public override bool SupportsPartialDocumentFormatting { get { return true; } }
+
+		protected override void CorrectIndentingImplementation (PolicyContainer policyParent, Ide.Editor.TextEditor editor, int line)
 		{
-			DocumentLine lineSegment = data.Document.GetLine (line);
-			if (lineSegment == null)
+			var doc = IdeApp.Workbench.ActiveDocument;
+			if (doc == null)
+				return;
+			CorrectIndentingImplementationAsync (editor, doc.DocumentContext, line, line, default).Ignore ();
+		}
+
+		protected async override Task CorrectIndentingImplementationAsync (Ide.Editor.TextEditor editor, DocumentContext context, int startLine, int endLine, CancellationToken cancellationToken)
+		{
+			if (editor.IndentationTracker == null)
+				return;
+			var startSegment = editor.GetLine (startLine);
+			if (startSegment == null)
+				return;
+			var endSegment = startLine != endLine ? editor.GetLine (endLine) : startSegment;
+			if (endSegment == null)
 				return;
 
 			try {
-				var policy = policyParent.Get<CSharpFormattingPolicy> (mimeTypeChain);
-				var tracker = new CSharpIndentEngine (data.Document, data.CreateNRefactoryTextEditorOptions (),  policy.CreateOptions ());
+				var document = context.AnalysisDocument;
 
-				tracker.Update (lineSegment.Offset);
-				for (int i = lineSegment.Offset; i < lineSegment.Offset + lineSegment.Length; i++) {
-					tracker.Push (data.Document.GetCharAt (i));
-				}
+				var formattingService = document.GetLanguageService<IEditorFormattingService> ();
+				if (formattingService == null || !formattingService.SupportsFormatSelection)
+					return;
 
-				string curIndent = lineSegment.GetIndentation (data.Document);
+				var formattingRules = new List<AbstractFormattingRule> ();
+				formattingRules.Add (ContainedDocumentPreserveFormattingRule.Instance);
+				formattingRules.AddRange (Formatter.GetDefaultFormattingRules (document));
 
-				int nlwsp = curIndent.Length;
-				if (!tracker.LineBeganInsideMultiLineComment || (nlwsp < lineSegment.LengthIncludingDelimiter && data.Document.GetCharAt (lineSegment.Offset + nlwsp) == '*')) {
-					// Possibly replace the indent
-					string newIndent = tracker.ThisLineIndent;
-					if (newIndent != curIndent) 
-						data.Replace (lineSegment.Offset, nlwsp, newIndent);
-				}
+				var workspace = document.Project.Solution.Workspace;
+				var root = await document.GetSyntaxRootAsync (cancellationToken).ConfigureAwait (false);
+				var options = await document.GetOptionsAsync (cancellationToken).ConfigureAwait (false);
+				var changes = Formatter.GetFormattedTextChanges (
+					root, new TextSpan [] { new TextSpan (startSegment.Offset, endSegment.EndOffset - startSegment.Offset) },
+					workspace, options, formattingRules, cancellationToken);
+
+				if (changes == null)
+					return;
+				await Runtime.RunInMainThread (delegate {
+					editor.ApplyTextChanges (changes);
+					editor.FixVirtualIndentation ();
+				});
 			} catch (Exception e) {
 				LoggingService.LogError ("Error while indenting", e);
 			}
 		}
-
-		public override void OnTheFlyFormat (MonoDevelop.Ide.Gui.Document doc, int startOffset, int endOffset)
+		protected override async void OnTheFlyFormatImplementation (Ide.Editor.TextEditor editor, DocumentContext context, int startOffset, int length)
 		{
-			OnTheFlyFormatter.Format (doc, startOffset, endOffset);
+			var doc = context.AnalysisDocument;
+
+			var formattingService = doc.GetLanguageService<IEditorFormattingService> ();
+			if (formattingService == null || !formattingService.SupportsFormatSelection)
+				return;
+
+			var changes = await formattingService.GetFormattingChangesAsync (doc, new TextSpan (startOffset, length), default (System.Threading.CancellationToken));
+			if (changes == null)
+				return;
+			editor.ApplyTextChanges (changes);
+			editor.FixVirtualIndentation ();
 		}
 
-
-		public static string FormatText (CSharpFormattingPolicy policy, TextStylePolicy textPolicy, string mimeType, string input, int startOffset, int endOffset)
+		public static string FormatText (Microsoft.CodeAnalysis.Options.OptionSet optionSet, string input, int startOffset, int endOffset)
 		{
-			var data = new TextEditorData ();
-			data.Document.SuppressHighlightUpdate = true;
-			data.Document.MimeType = mimeType;
-			data.Document.FileName = "toformat.cs";
-			if (textPolicy != null) {
-				data.Options.TabsToSpaces = textPolicy.TabsToSpaces;
-				data.Options.TabSize = textPolicy.TabWidth;
-				data.Options.IndentationSize = textPolicy.IndentWidth;
-				data.Options.IndentStyle = textPolicy.RemoveTrailingWhitespace ? IndentStyle.Virtual : IndentStyle.Smart;
-			}
-			data.Text = input;
+			var inputTree = CSharpSyntaxTree.ParseText (input);
 
-			// System.Console.WriteLine ("-----");
-			// System.Console.WriteLine (data.Text.Replace (" ", ".").Replace ("\t", "->"));
-			// System.Console.WriteLine ("-----");
-
-			var parser = new CSharpParser ();
-			var compilationUnit = parser.Parse (data);
-			bool hadErrors = parser.HasErrors;
-			
-			if (hadErrors) {
-				//				foreach (var e in parser.ErrorReportPrinter.Errors)
-				//					Console.WriteLine (e.Message);
-				return input.Substring (startOffset, Math.Max (0, Math.Min (endOffset, input.Length) - startOffset));
-			}
-
-			var originalVersion = data.Document.Version;
-
-			var textEditorOptions = data.CreateNRefactoryTextEditorOptions ();
-			var formattingVisitor = new ICSharpCode.NRefactory.CSharp.CSharpFormatter (
-				policy.CreateOptions (),
-				textEditorOptions
-			) {
-				FormattingMode = FormattingMode.Intrusive
-			};
-
-			var changes = formattingVisitor.AnalyzeFormatting (data.Document, compilationUnit);
-			try {
-				changes.ApplyChanges (startOffset, endOffset - startOffset);
-			} catch (Exception e) {
-				LoggingService.LogError ("Error in code formatter", e);
-				return input.Substring (startOffset, Math.Max (0, Math.Min (endOffset, input.Length) - startOffset));
-			}
-
-			// check if the formatter has produced errors
-			parser = new CSharpParser ();
-			parser.Parse (data);
-			if (parser.HasErrors) {
-				LoggingService.LogError ("C# formatter produced source code errors. See console for output.");
-				return input.Substring (startOffset, Math.Max (0, Math.Min (endOffset, input.Length) - startOffset));
-			}
-
-			var currentVersion = data.Document.Version;
-
-			string result = data.GetTextBetween (startOffset, originalVersion.MoveOffsetTo (currentVersion, endOffset));
-			data.Dispose ();
-			return result;
+			var root = inputTree.GetRoot ();
+			var doc = Formatter.Format (root, new TextSpan (startOffset, endOffset - startOffset), IdeApp.TypeSystemService.Workspace, optionSet);
+			var result = doc.ToFullString ();
+			return result.Substring (startOffset, endOffset + result.Length - input.Length - startOffset);
 		}
 
-		public override string FormatText (PolicyContainer policyParent, IEnumerable<string> mimeTypeChain, string input, int startOffset, int endOffset)
+		protected override ITextSource FormatImplementation (PolicyContainer policyParent, string mimeType, ITextSource input, int startOffset, int length)
 		{
-			var policy = policyParent.Get<CSharpFormattingPolicy> (mimeTypeChain);
-			var textPolicy = policyParent.Get<TextStylePolicy> (mimeTypeChain);
+			var chain = IdeServices.DesktopService.GetMimeTypeInheritanceChain (mimeType);
+			var policy = policyParent.Get<CSharpFormattingPolicy> (chain);
+			var textPolicy = policyParent.Get<TextStylePolicy> (chain);
+			var optionSet = policy.CreateOptions (textPolicy);
 
-			return FormatText (policy, textPolicy, mimeTypeChain.First (), input, startOffset, endOffset);
+			if (input is IReadonlyTextDocument doc) {
+				try {
+					var conventions = EditorConfigService.GetEditorConfigContext (doc.FileName).WaitAndGetResult ();
+					if (conventions != null)
+						optionSet = new FormattingDocumentOptionSet (optionSet, new DocumentOptions (optionSet, conventions.CurrentConventions));
+				} catch (Exception e) {
+					LoggingService.LogError ("Error while loading coding conventions.", e);
+				}
+			}
 
+			return new StringTextSource (FormatText (optionSet, input.Text, startOffset, startOffset + length));
 		}
+
+		sealed class DocumentOptions : IDocumentOptions
+		{
+			readonly OptionSet optionSet;
+			readonly ICodingConventionsSnapshot codingConventionsSnapshot;
+
+			public DocumentOptions (OptionSet optionSet, ICodingConventionsSnapshot codingConventionsSnapshot)
+			{
+				this.optionSet = optionSet;
+				this.codingConventionsSnapshot = codingConventionsSnapshot;
+			}
+
+			public bool TryGetDocumentOption (OptionKey option, OptionSet underlyingOptions, out object value)
+			{
+				if (codingConventionsSnapshot != null) {
+					var editorConfigPersistence = option.Option.StorageLocations.OfType<IEditorConfigStorageLocation> ().SingleOrDefault ();
+					if (editorConfigPersistence != null) {
+						
+						var tempRawConventions = codingConventionsSnapshot.AllRawConventions;
+						// HACK: temporarly map our old Dictionary<string, object> to a Dictionary<string, string>. This will go away in a future commit.
+						// see https://github.com/dotnet/roslyn/commit/6a5be42f026f8d0432cfe8ee7770ff8f6be01bd6#diff-626aa9dd2f6e07eafa8eac7ddb0eb291R34
+						var allRawConventions = ImmutableDictionary.CreateRange (tempRawConventions.Select (c => Roslyn.Utilities.KeyValuePairUtil.Create (c.Key, c.Value.ToString ())));
+
+						try {
+							var underlyingOption = underlyingOptions.GetOption (option);
+							if (editorConfigPersistence.TryGetOption (underlyingOption, allRawConventions, option.Option.Type, out value))
+								return true;
+						} catch (Exception ex) {
+							LoggingService.LogError ("Error while getting editor config preferences.", ex);
+						}
+					}
+				}
+
+				var result = optionSet.GetOption (option);
+				if (result == underlyingOptions.GetOption (option)) {
+					value = null;
+					return false;
+				}
+				value = result;
+				return true;
+			}
+		}
+
+		sealed class FormattingDocumentOptionSet : OptionSet
+		{
+			readonly OptionSet fallbackOptionSet;
+			readonly IDocumentOptions optionsProvider;
+
+			internal FormattingDocumentOptionSet (OptionSet fallbackOptionSet, IDocumentOptions optionsProvider)
+			{
+				this.fallbackOptionSet = fallbackOptionSet;
+				this.optionsProvider = optionsProvider;
+			}
+
+			public override object GetOption (OptionKey optionKey)
+			{
+				if (optionsProvider.TryGetDocumentOption (optionKey, fallbackOptionSet, out object value))
+					return value;
+				return fallbackOptionSet.GetOption (optionKey);
+			}
+
+			public override OptionSet WithChangedOption (OptionKey optionAndLanguage, object value) => throw new InvalidOperationException ();
+
+			internal override IEnumerable<OptionKey> GetChangedOptions (OptionSet optionSet) => throw new InvalidOperationException ();
+		}
+
 	}
 }

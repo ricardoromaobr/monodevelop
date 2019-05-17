@@ -37,7 +37,7 @@ namespace MonoDevelop.Components.AutoTest.Results
 	{
 		Widget resultWidget;
 
-		public GtkWidgetResult (Widget widget)
+		internal GtkWidgetResult (Widget widget)
 		{
 			resultWidget = widget;
 		}
@@ -76,7 +76,7 @@ namespace MonoDevelop.Components.AutoTest.Results
 				return this;
 			}
 
-			Window window = resultWidget as Window;
+			var window = resultWidget as Gtk.Window;
 			if (window != null) {
 				if (window.Title != null && window.Title.IndexOf (mark) > -1) {
 					return this;
@@ -92,7 +92,7 @@ namespace MonoDevelop.Components.AutoTest.Results
 
 		public override AppResult CheckType (Type desiredType)
 		{
-			if (resultWidget.GetType () == desiredType || resultWidget.GetType ().IsSubclassOf (desiredType)) {
+			if (desiredType.IsInstanceOfType (resultWidget)) {
 				return desiredType == typeof(Notebook) ? new GtkNotebookResult (resultWidget) : this;
 			}
 
@@ -137,7 +137,7 @@ namespace MonoDevelop.Components.AutoTest.Results
 					propText = item.Label;
 				}
 
-				if (button != null && button.UseUnderline) {
+				if (button != null && button.UseUnderline && propText != null) {
 					int indexOfUnderline = propText.IndexOf ("_");
 					if (indexOfUnderline > -1) {
 						propText = propText.Remove (indexOfUnderline, 1);
@@ -152,7 +152,7 @@ namespace MonoDevelop.Components.AutoTest.Results
 			return null;
 		}
 
-		TreeModel ModelFromWidget (Widget widget)
+		protected TreeModel ModelFromWidget (Widget widget)
 		{
 			TreeView tv = widget as TreeView;
 			if (tv != null) {
@@ -179,25 +179,29 @@ namespace MonoDevelop.Components.AutoTest.Results
 			}
 
 			// Check if the class has the SemanticModelAttribute
+			var columnNumber = GetColumnNumber (column, model);
+			return columnNumber == -1 ? null : new GtkTreeModelResult (resultWidget, model, columnNumber) { SourceQuery = this.SourceQuery };
+		}
+
+		protected int GetColumnNumber (string column, TreeModel model)
+		{
 			Type modelType = model.GetType ();
 			SemanticModelAttribute attr = modelType.GetCustomAttribute<SemanticModelAttribute> ();
-
 			if (attr == null) {
 				// Check if the instance has the attributes
 				AttributeCollection attrs = TypeDescriptor.GetAttributes (model);
 				attr = (SemanticModelAttribute)attrs [typeof(SemanticModelAttribute)];
-
 				if (attr == null) {
-					return null;
+					if (column.StartsWith ("column__")) {
+						int columnNum;
+						if (int.TryParse (column.Replace ("column__", string.Empty), out columnNum))
+							return columnNum;
+					}
+					else
+						return -1;
 				}
 			}
-
-			int columnNumber = Array.IndexOf (attr.ColumnNames, column);
-			if (columnNumber == -1) {
-				return null;
-			}
-
-			return new GtkTreeModelResult (resultWidget, model, columnNumber) { SourceQuery = this.SourceQuery };
+			return Array.IndexOf (attr.ColumnNames, column);
 		}
 
 		public override AppResult Property (string propertyName, object value)
@@ -251,11 +255,57 @@ namespace MonoDevelop.Components.AutoTest.Results
 		public override bool Click ()
 		{
 			Button button = resultWidget as Button;
-			if (button == null) {
-				return false;
+			if (button != null) {
+				button.Click ();
+				return true;
 			}
+			Label lbl = resultWidget as Label;
+			if(lbl != null)
+			{
+				GLib.Signal.Emit (lbl, "activate-link", new object[]{});
+				return true;
+			}
+			GLib.Signal.Emit (resultWidget, "button-press-event", new object [] { });
+			GLib.Signal.Emit (resultWidget, "button-release-event", new object [] { });
 
-			button.Click ();
+			return true;
+		}
+
+		void SendButtonEvent (Widget target, Gdk.EventType eventType, double x, double y, Gdk.ModifierType state, uint button)
+		{
+			Gdk.Window win = target.GdkWindow;
+
+			int rx, ry;
+			win.GetRootOrigin (out rx, out ry);
+
+			var nativeEvent = new NativeEventButtonStruct {
+				type = eventType,
+				send_event = 1,
+				window = win.Handle,
+				state = (uint)state,
+				button = button,
+				x = x,
+				y = y,
+				axes = IntPtr.Zero,
+				device = IntPtr.Zero,
+				time = Global.CurrentEventTime,
+				x_root = x + rx,
+				y_root = y + ry
+			};
+
+			IntPtr ptr = GLib.Marshaller.StructureToPtrAlloc (nativeEvent);
+			try {
+				Gdk.EventHelper.Put (new Gdk.EventButton (ptr));
+			} finally {
+				Marshal.FreeHGlobal (ptr);
+			}
+		}
+
+		public override bool Click (double x, double y)
+		{
+			SendButtonEvent (resultWidget, Gdk.EventType.ButtonPress, x, y, 0, 1);
+			SendButtonEvent (resultWidget, Gdk.EventType.ButtonRelease, x, y, 0, 1);
+
 			return true;
 		}
 
@@ -400,6 +450,12 @@ namespace MonoDevelop.Components.AutoTest.Results
 			case "TAB":
 				return Gdk.Key.Tab;
 
+			case "BKSP":
+				return Gdk.Key.BackSpace;
+
+			case "DELETE":
+				return Gdk.Key.Delete;
+
 			default:
 				throw new Exception ("Unknown keystring: " + keyString);
 			}
@@ -442,12 +498,13 @@ namespace MonoDevelop.Components.AutoTest.Results
 				return;
 			}
 
-			Cairo.Context cr = Gdk.CairoHelper.Create (resultWidget.GdkWindow);
-			cr.SetSourceRGB (1.0, 0.0, 0.0);
+			using (var cr = Gdk.CairoHelper.Create (resultWidget.GdkWindow)) {
+				cr.SetSourceRGB (1.0, 0.0, 0.0);
 
-			Gdk.Rectangle allocation = resultWidget.Allocation;
-			Gdk.CairoHelper.Rectangle (cr, allocation);
-			cr.Stroke ();
+				Gdk.Rectangle allocation = resultWidget.Allocation;
+				Gdk.CairoHelper.Rectangle (cr, allocation);
+				cr.Stroke ();
+			}
 		}
 
 		public override void Flash ()
@@ -467,6 +524,17 @@ namespace MonoDevelop.Components.AutoTest.Results
 				}
 				return true;
 			});
+		}
+
+		public override void SetProperty (string propertyName, object value)
+		{
+			base.SetProperty (resultWidget, propertyName, value);
+		}
+
+		protected override void Dispose (bool disposing)
+		{
+			resultWidget = null;
+			base.Dispose (disposing);
 		}
 	}
 }

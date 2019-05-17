@@ -1,4 +1,4 @@
-// AddLogEntryDialog.cs
+﻿// AddLogEntryDialog.cs
 //
 // Author:
 //   Lluis Sanchez Gual
@@ -35,7 +35,7 @@ using MonoDevelop.Ide.Fonts;
 
 namespace MonoDevelop.ChangeLogAddIn
 {
-	partial class AddLogEntryDialog : Dialog
+	partial class AddLogEntryDialog : Gtk.Dialog
 	{
 		readonly ListStore store;
 		readonly Dictionary<ChangeLogEntry, string> changes = new Dictionary<ChangeLogEntry, string> ();
@@ -47,7 +47,7 @@ namespace MonoDevelop.ChangeLogAddIn
 		{
 			Build ();
 			
-			textview.ModifyFont (FontService.MonospaceFont);
+			textview.ModifyFont (IdeServices.FontService.MonospaceFont);
 			textview.WrapMode = WrapMode.None;
 			textview.AcceptsTab = true;
 			Pango.TabArray tabs = new Pango.TabArray (1, true);

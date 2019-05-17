@@ -24,28 +24,34 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 using System;
-using Mono.Cecil;
-using ICSharpCode.NRefactory.TypeSystem;
+using ICSharpCode.Decompiler.CSharp;
+using ICSharpCode.Decompiler.TypeSystem;
 using System.Threading.Tasks;
 using MonoDevelop.Core;
 using System.IO;
 using System.Threading;
+using System.Collections.Generic;
+using ICSharpCode.Decompiler.Metadata;
+using System.Reflection.Metadata;
+using System.Linq;
+
 
 namespace MonoDevelop.AssemblyBrowser
 {
-	class AssemblyLoader : IAssemblyResolver, IDisposable
+	class AssemblyLoader : IDisposable
 	{
 		readonly CancellationTokenSource src = new CancellationTokenSource ();
 		readonly AssemblyBrowserWidget widget;
-		
+
 		public string FileName {
 			get;
 			private set;
 		}
-		
-		Task<AssemblyDefinition> assemblyLoaderTask;
 
-		public Task<AssemblyDefinition> LoadingTask {
+		Task<PEFile> assemblyLoaderTask;
+		TaskCompletionSource<PEFile> assemblyDefinitionTaskSource;
+
+		public Task<PEFile> LoadingTask {
 			get {
 				return assemblyLoaderTask;
 			}
@@ -54,85 +60,128 @@ namespace MonoDevelop.AssemblyBrowser
 			}
 		}
 
-		public AssemblyDefinition Assembly {
+		public PEFile Assembly => AssemblyTask.Result;
+		public Task<PEFile> AssemblyTask => assemblyDefinitionTaskSource.Task;
+
+		public MetadataReader ModuleDefinition {
 			get {
-				return assemblyLoaderTask.Result;
+				return assemblyLoaderTask.Result.Metadata;
 			}
 		}
-		
-		readonly Lazy<IUnresolvedAssembly> unresolvedAssembly;
-		public IUnresolvedAssembly UnresolvedAssembly {
+
+		CSharpDecompiler csharpDecompiler;
+
+		public CSharpDecompiler CSharpDecompiler {
 			get {
-				return unresolvedAssembly.Value;
+				if (csharpDecompiler == null) {
+					csharpDecompiler = new CSharpDecompiler (DecompilerTypeSystem, new ICSharpCode.Decompiler.DecompilerSettings ());
+				}
+
+				return csharpDecompiler;
 			}
 		}
-		
+
+		DecompilerTypeSystem decompilerTypeSystem;
+		public DecompilerTypeSystem DecompilerTypeSystem { 
+			get { 
+				if (decompilerTypeSystem == null) {
+					decompilerTypeSystem = new DecompilerTypeSystem (Assembly, new AssemblyResolver (widget));
+				}
+				return decompilerTypeSystem; 
+			}
+		}
+
+		public Error Error { get; internal set; }
+
 		public AssemblyLoader (AssemblyBrowserWidget widget, string fileName)
 		{
 			if (widget == null)
-				throw new ArgumentNullException ("widget");
+				throw new ArgumentNullException (nameof (widget));
 			if (fileName == null)
-				throw new ArgumentNullException ("fileName");
+				throw new ArgumentNullException (nameof (fileName));
 			this.widget = widget;
-			this.FileName = fileName;
+			FileName = fileName;
 			if (!File.Exists (fileName))
-				throw new ArgumentException ("File doesn't exist.", "fileName");
-			this.assemblyLoaderTask = Task.Factory.StartNew<AssemblyDefinition> (() => {
+				throw new ArgumentException ("File doesn't exist.", nameof (fileName));
+
+			assemblyDefinitionTaskSource = new TaskCompletionSource<PEFile> ();
+
+			assemblyLoaderTask = Task.Run (() => {
 				try {
-					return AssemblyDefinition.ReadAssembly (FileName, new ReaderParameters {
-						AssemblyResolver = this
-					});
+					var peFile = new PEFile (FileName, System.Reflection.PortableExecutable.PEStreamOptions.PrefetchEntireImage);
+					assemblyDefinitionTaskSource.SetResult (peFile);
+					return peFile;
 				} catch (Exception e) {
 					LoggingService.LogError ("Error while reading assembly " + FileName, e);
+					Error = new Error(e.Message);
+					assemblyDefinitionTaskSource.SetResult (null);
 					return null;
-				}
-			}, src.Token);
-			
-			this.unresolvedAssembly = new Lazy<IUnresolvedAssembly> (delegate {
-				try {
-					return widget.CecilLoader.LoadAssembly (Assembly);
-				} catch (Exception e) {
-					LoggingService.LogError ("Error while loading assembly", e);
-					return new ICSharpCode.NRefactory.TypeSystem.Implementation.DefaultUnresolvedAssembly (FileName);
 				}
 			});
 		}
-		
-		#region IAssemblyResolver implementation
-		AssemblyDefinition IAssemblyResolver.Resolve (AssemblyNameReference name)
+
+		class AssemblyResolver : IAssemblyResolver
 		{
-			var loader = widget.AddReferenceByAssemblyName (name);
-			return loader != null ? loader.Assembly : null;
+			readonly AssemblyBrowserWidget widget;
+			public AssemblyResolver (AssemblyBrowserWidget widget)
+			{
+				this.widget = widget;
+			}
+
+			public PEFile Resolve (IAssemblyReference reference)
+			{
+				var loader = widget.AddReferenceByAssemblyName (reference.FullName);
+				return loader != null ? loader.Assembly : null;
+			}
+
+			public PEFile ResolveModule (PEFile mainModule, string moduleName)
+			{
+				var loader = widget.AddReferenceByFileName (mainModule.FileName);
+				return loader != null ? loader.Assembly : null;
+			}
 		}
-		
-		AssemblyDefinition IAssemblyResolver.Resolve (AssemblyNameReference name, ReaderParameters parameters)
+
+		class FastNonInterningProvider : InterningProvider
 		{
-			var loader = widget.AddReferenceByAssemblyName (name);
-			return loader != null ? loader.Assembly : null;
+			Dictionary<string, string> stringDict = new Dictionary<string, string> ();
+
+			public override string Intern (string text)
+			{
+				if (text == null)
+					return null;
+
+				string output;
+				if (stringDict.TryGetValue (text, out output))
+					return output;
+				stringDict [text] = text;
+				return text;
+			}
+
+			public override ISupportsInterning Intern (ISupportsInterning obj)
+			{
+				return obj;
+			}
+
+			public override IList<T> InternList<T> (IList<T> list)
+			{
+				return list;
+			}
+
+			public override object InternValue (object obj)
+			{
+				return obj;
+			}
 		}
-		
-		AssemblyDefinition IAssemblyResolver.Resolve (string fullName)
-		{
-			var loader = widget.AddReferenceByAssemblyName (fullName);
-			return loader != null ? loader.Assembly : null;
-		}
-		
-		AssemblyDefinition IAssemblyResolver.Resolve (string fullName, ReaderParameters parameters)
-		{
-			var loader = widget.AddReferenceByAssemblyName (fullName);
-			return loader != null ? loader.Assembly : null;
-		}
-		#endregion
-		
+
 		public string LookupAssembly (string fullAssemblyName)
 		{
 			var assemblyFile = Runtime.SystemAssemblyService.DefaultAssemblyContext.GetAssemblyLocation (fullAssemblyName, null);
-			if (assemblyFile != null && System.IO.File.Exists (assemblyFile))
+			if (assemblyFile != null && File.Exists (assemblyFile))
 				return assemblyFile;
-			
+
 			var name = AssemblyNameReference.Parse (fullAssemblyName);
 			var path = Path.GetDirectoryName (FileName);
-			
+
 			var dll = Path.Combine (path, name.Name + ".dll");
 			if (File.Exists (dll))
 				return dll;
@@ -141,7 +190,7 @@ namespace MonoDevelop.AssemblyBrowser
 				return exe;
 
 			foreach (var asm in Runtime.SystemAssemblyService.DefaultAssemblyContext.GetAssemblies ()) {
-				if (asm.Name.ToLowerInvariant () == fullAssemblyName.ToLowerInvariant ())
+				if (string.Equals (asm.Name, fullAssemblyName, StringComparison.OrdinalIgnoreCase))
 					return asm.Location;
 			}
 

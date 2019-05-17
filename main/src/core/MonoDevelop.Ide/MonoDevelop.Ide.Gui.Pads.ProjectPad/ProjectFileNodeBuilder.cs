@@ -1,4 +1,4 @@
-//
+﻿//
 // ProjectFileNodeBuilder.cs
 //
 // Author:
@@ -39,6 +39,8 @@ using MonoDevelop.Core.Collections;
 using MonoDevelop.Ide.Gui.Components;
 using System.Linq;
 using MonoDevelop.Components;
+using System.Threading.Tasks;
+using System.Threading;
 
 namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 {
@@ -79,25 +81,14 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 
 			nodeInfo.Label = GLib.Markup.EscapeText (file.Link.IsNullOrEmpty ? file.FilePath.FileName : file.Link.FileName);
 			if (!File.Exists (file.FilePath)) {
-				nodeInfo.Label = "<span foreground='red'>" + nodeInfo.Label + "</span>";
+				nodeInfo.Label = "<span foreground='" + Styles.ErrorForegroundColor.ToHexString (false) + "'>" + nodeInfo.Label + "</span>";
 			}
 			
-			nodeInfo.Icon = DesktopService.GetIconForFile (file.FilePath, Gtk.IconSize.Menu);
+			nodeInfo.Icon = IdeServices.DesktopService.GetIconForFile (file.FilePath, Gtk.IconSize.Menu);
 			
 			if (file.IsLink && nodeInfo.Icon != null) {
 				var overlay = ImageService.GetIcon ("md-link-overlay").WithSize (Xwt.IconSize.Small);
-				var cached = Context.GetComposedIcon (nodeInfo.Icon, overlay);
-				if (cached != null)
-					nodeInfo.Icon = cached;
-				else {
-					var ib = new Xwt.Drawing.ImageBuilder (nodeInfo.Icon.Width, nodeInfo.Icon.Height);
-					ib.Context.DrawImage (nodeInfo.Icon, 0, 0);
-					ib.Context.DrawImage (overlay, 0, 0);
-					var res = ib.ToVectorImage ();
-					ib.Dispose ();
-					Context.CacheComposedIcon (nodeInfo.Icon, overlay, res);
-					nodeInfo.Icon = res;
-				}
+				nodeInfo.OverlayBottomRight = overlay;
 			}
 		}
 		
@@ -120,9 +111,6 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 		
 		public override int CompareObjects (ITreeNavigator thisNode, ITreeNavigator otherNode)
 		{
-			if (otherNode.DataItem is ProjectFolder)
-				return 1;
-
 			if (!(thisNode.DataItem is ProjectFile))
 				return DefaultSort;
 			if (!(otherNode.DataItem is ProjectFile))
@@ -154,8 +142,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			base.BuildChildNodes (treeBuilder, dataObject);
 			ProjectFile file = (ProjectFile) dataObject;
 			if (file.HasChildren)
-				foreach (ProjectFile pf in file.DependentChildren)
-					treeBuilder.AddChild (pf);
+				treeBuilder.AddChildren (file.DependentChildren);
 		}
 	}
 	
@@ -168,39 +155,104 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			selectionLength = Path.GetFileNameWithoutExtension(name).Length;
 		}
 
-		public override void RenameItem (string newName)
+		public async override void RenameItem (string newName)
 		{
-			ProjectFile newProjectFile = null;
 			var file = (ProjectFile) CurrentNode.DataItem;
-			
-			FilePath newPath, newLink = FilePath.Null;
-			if (file.IsLink) {
-				var oldLink = file.ProjectVirtualPath;
-				newLink = oldLink.ParentDirectory.Combine (newName);
-				newPath = file.Project.BaseDirectory.Combine (newLink);
-			} else {
-				newPath = file.FilePath.ParentDirectory.Combine (newName);	
-			}
-			
-			try {
-				if (file.Project != null)
-					newProjectFile = file.Project.Files.GetFileWithVirtualPath (newPath.ToRelative (file.Project.BaseDirectory));
 
-				if (!FileService.IsValidPath (newPath)) {
-					MessageService.ShowWarning (GettextCatalog.GetString ("The name you have chosen contains illegal characters. Please choose a different name."));
-				} else if ((newProjectFile != null && newProjectFile != file) || File.Exists (file.FilePath.ParentDirectory.Combine (newName))) {
-					// If there is already a file under the newPath which is *different*, then throw an exception
-					MessageService.ShowWarning (GettextCatalog.GetString ("File or directory name is already in use. Please choose a different one."));
-				} else {
+			string oldFileName = file.FilePath;
+			string newFileName = Path.Combine (Path.GetDirectoryName (oldFileName), newName);
+			if (oldFileName == newFileName)
+				return;
+
+			var dependentFilesToRename = GetDependentFilesToRename (file, newName);
+
+			try {
+				if (CanRenameFile (file, newName)) {
+					if (dependentFilesToRename != null) {
+						if (dependentFilesToRename.Any (f => !CanRenameFile (f.File, f.NewName))) {
+							return;
+						}
+					}
+
 					FileService.RenameFile (file.FilePath, newName);
+
+					if (dependentFilesToRename != null) {
+						foreach (var dependentFile in dependentFilesToRename) {
+							FileService.RenameFile (dependentFile.File.FilePath, dependentFile.NewName);
+						}
+					}
+
 					if (file.Project != null)
-						IdeApp.ProjectOperations.Save (file.Project);
+						await IdeApp.ProjectOperations.SaveAsync (file.Project);
 				}
 			} catch (ArgumentException) { // new file name with wildcard (*, ?) characters in it
 				MessageService.ShowWarning (GettextCatalog.GetString ("The name you have chosen contains illegal characters. Please choose a different name."));
 			} catch (IOException ex) {
 				MessageService.ShowError (GettextCatalog.GetString ("There was an error renaming the file."), ex);
 			}
+		}
+
+		static FilePath GetRenamedFilePath (ProjectFile file, string newName)
+		{
+			if (file.IsLink) {
+				var oldLink = file.ProjectVirtualPath;
+				var newLink = oldLink.ParentDirectory.Combine (newName);
+				return file.Project.BaseDirectory.Combine (newLink);
+			}
+			return file.FilePath.ParentDirectory.Combine (newName);	
+		}
+
+		/// <summary>
+		/// Returns all dependent files that have names that start with the old name of the file.
+		/// </summary>
+		static List<(ProjectFile File, string NewName)> GetDependentFilesToRename (ProjectFile file, string newName)
+		{
+			if (!file.HasChildren)
+				return null;
+
+			List<(ProjectFile File, string NewName)> files = null;
+
+			string oldName = file.FilePath.FileName;
+			foreach (ProjectFile child in file.DependentChildren) {
+				string oldChildName = child.FilePath.FileName;
+				if (oldChildName.StartsWith (oldName, StringComparison.CurrentCultureIgnoreCase)) {
+					string childNewName = newName + oldChildName.Substring (oldName.Length);
+
+					if (files == null)
+						files = new List<(ProjectFile projectFile, string name)> ();
+					files.Add ((child, childNewName));
+				}
+			}
+			return files;
+		}
+
+		static bool CanRenameFile (ProjectFile file, string newName)
+		{
+			ProjectFile newProjectFile = null;
+			FilePath newPath = GetRenamedFilePath (file, newName);
+
+			if (file.Project != null)
+				newProjectFile = file.Project.Files.GetFileWithVirtualPath (newPath.ToRelative (file.Project.BaseDirectory));
+
+			if (!FileService.IsValidPath (newPath) || ProjectFolderCommandHandler.ContainsDirectorySeparator (newName)) {
+				MessageService.ShowWarning (GettextCatalog.GetString ("The name you have chosen contains illegal characters. Please choose a different name."));
+				return false;
+			} else if ((newProjectFile != null && newProjectFile != file) || FileExistsCaseSensitive (file.FilePath.ParentDirectory, newName)) {
+				// If there is already a file under the newPath which is *different*, then throw an exception
+				MessageService.ShowWarning (GettextCatalog.GetString ("File or directory name is already in use. Please choose a different one."));
+				return false;
+			}
+
+			return true;
+		}
+
+		static bool FileExistsCaseSensitive (FilePath parentDirectory, string fileName)
+		{
+			if (!Directory.Exists (parentDirectory))
+				return false;
+
+			return Directory.EnumerateFiles (parentDirectory, fileName)
+				.Any (file => Path.GetFileName (file) == fileName);
 		}
 		
 		public override void ActivateItem ()
@@ -233,7 +285,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 		[AllowMultiSelection]
 		public override void DeleteMultipleItems ()
 		{
-			var projects = new Set<SolutionEntityItem> ();
+			var projects = new Set<SolutionItem> ();
 			var files = new List<ProjectFile> ();
 			bool hasChildren = false;
 
@@ -300,7 +352,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 					FileService.DeleteFile (file.Name);
 			}
 
-			IdeApp.ProjectOperations.Save (projects);
+			IdeApp.ProjectOperations.SaveAsync (projects);
 		}
 
 		static bool CheckAnyFileExists (IEnumerable<ProjectFile> files)
@@ -342,15 +394,15 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 		}
 		
 		[CommandUpdateHandler (ViewCommands.OpenWithList)]
-		public void OnOpenWithUpdate (CommandArrayInfo info)
+		public async Task OnOpenWithUpdate (CommandArrayInfo info, CancellationToken cancellationToken)
 		{
 			var pf = (ProjectFile) CurrentNode.DataItem;
-			PopulateOpenWithViewers (info, pf.Project, pf.FilePath);
+			await PopulateOpenWithViewers (info, pf.Project, pf.FilePath);
 		}
 		
-		internal static void PopulateOpenWithViewers (CommandArrayInfo info, Project project, string filePath)
+		internal static async Task PopulateOpenWithViewers (CommandArrayInfo info, Project project, string filePath)
 		{
-			var viewers = DisplayBindingService.GetFileViewers (filePath, project).ToList ();
+			var viewers = (await IdeServices.DisplayBindingService.GetFileViewers (filePath, project)).ToList ();
 			
 			//show the default viewer first
 			var def = viewers.FirstOrDefault (v => v.CanUseAsDefault) ?? viewers.FirstOrDefault (v => v.IsExternal);
@@ -378,7 +430,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 		[AllowMultiSelection]
 		public void OnSetBuildAction (object ob)
 		{
-			Set<SolutionEntityItem> projects = new Set<SolutionEntityItem> ();
+			Set<SolutionItem> projects = new Set<SolutionItem> ();
 			string action = (string)ob;
 			
 			foreach (ITreeNavigator node in CurrentNodes) {
@@ -386,7 +438,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 				file.BuildAction = action;
 				projects.Add (file.Project);
 			}
-			IdeApp.ProjectOperations.Save (projects);
+			IdeApp.ProjectOperations.SaveAsync (projects);
 		}
 		
 		[CommandUpdateHandler (FileCommands.SetBuildAction)]
@@ -394,9 +446,10 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 		{
 			var toggledActions = new Set<string> ();
 			Project proj = null;
+			ProjectFile finfo = null;
 
 			foreach (var node in CurrentNodes) {
-				var finfo = (ProjectFile) node.DataItem;
+				finfo = (ProjectFile) node.DataItem;
 				
 				//disallow multi-slect on more than one project, since available build actions may differ
 				if (proj == null && finfo.Project != null) {
@@ -411,7 +464,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			if (proj == null)
 				return;
 			
-			foreach (string action in proj.GetBuildActions ()) {
+			foreach (string action in proj.GetBuildActions (finfo.FilePath)) {
 				if (action == "--") {
 					info.AddSeparator ();
 				} else {
@@ -452,7 +505,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 				}
 			}
 			
-			Set<SolutionEntityItem> projects = new Set<SolutionEntityItem> ();
+			Set<SolutionItem> projects = new Set<SolutionItem> ();
 			
 			foreach (ITreeNavigator node in CurrentNodes) {
 				ProjectFile file = (ProjectFile) node.DataItem;
@@ -464,7 +517,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 				}
 			}
 				
-			IdeApp.ProjectOperations.Save (projects);
+			IdeApp.ProjectOperations.SaveAsync (projects);
 		}
 		
 		[CommandUpdateHandler (FileCommands.CopyToOutputDirectory)]

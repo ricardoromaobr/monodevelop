@@ -2,26 +2,30 @@ using System;
 using System.IO;
 using Gtk;
 using MonoDevelop.Core;
+using MonoDevelop.Components;
 using MonoDevelop.Components.Commands;
-using MonoDevelop.Ide.Gui;
 using MonoDevelop.Ide;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using MonoDevelop.Ide.Gui.Documents;
 
 namespace MonoDevelop.VersionControl.Views
 {
-	public interface ILogView : IAttachableViewContent
+	public interface ILogView
 	{
 	}
 	
-	public class LogView : BaseView, ILogView
+	class LogView : BaseView, ILogView
 	{
 		LogWidget widget;
 		VersionInfo vinfo;
-		
-		ListStore changedpathstore;
-		
+		VersionControlDocumentInfo info;
+
 		public LogWidget LogWidget {
 			get {
+				if (widget == null)
+					CreateControlFromInfo ();
 				return widget;
 			}
 		}
@@ -31,8 +35,7 @@ namespace MonoDevelop.VersionControl.Views
 			return items.All (i => i.VersionInfo.CanLog);
 		}
 		
-		VersionControlDocumentInfo info;
-		public LogView (VersionControlDocumentInfo info) : base (GettextCatalog.GetString ("Log"))
+		public LogView (VersionControlDocumentInfo info) : base (GettextCatalog.GetString ("Log"), GettextCatalog.GetString ("Shows the source control log for the current file"))
 		{
 			this.info = info;
 		}
@@ -44,74 +47,36 @@ namespace MonoDevelop.VersionControl.Views
 			widget = lw;
 			info.Updated += OnInfoUpdated;
 			lw.History = this.info.History;
-			vinfo   = this.info.VersionInfo;
-		
-			if (WorkbenchWindow != null)
-				widget.SetToolbar (WorkbenchWindow.GetToolbar (this));
+			vinfo   = this.info.Item.VersionInfo;
+			Init ();
 		}
 
 		void OnInfoUpdated (object sender, EventArgs e)
 		{
 			widget.History = this.info.History;
-			vinfo   = this.info.VersionInfo;
+			vinfo   = this.info.Item.VersionInfo;
 		}
 
-		[Obsolete]
-		public LogView (string filepath, bool isDirectory, Revision [] history, Repository vc) 
-			: base (Path.GetFileName (filepath) + " Log")
+		protected override Task<Control> OnGetViewControlAsync (CancellationToken token, DocumentViewContent view)
 		{
-			try {
-				this.vinfo = vc.GetVersionInfo (filepath, VersionInfoQueryFlags.IgnoreCache);
-			}
-			catch (Exception ex) {
-				MessageService.ShowError (GettextCatalog.GetString ("Version control command failed."), ex);
-			}
-			
-			// Widget setup
-			VersionControlDocumentInfo info  =new VersionControlDocumentInfo (null, null, vc);
-			info.History = history;
-			info.VersionInfo = vinfo;
-			var lw = new LogWidget (info);
-			
-			widget = lw;
-			lw.History = history;
+			LogWidget.SetToolbar (view.GetToolbar ());
+			return Task.FromResult<Control> (LogWidget);
 		}
 
-		
-		public override Gtk.Widget Control { 
-			get {
-				if (widget == null)
-					CreateControlFromInfo ();
-				return widget; 
-			}
-		}
-
-		protected override void OnWorkbenchWindowChanged (EventArgs e)
-		{
-			base.OnWorkbenchWindowChanged (e);
-			if (WorkbenchWindow != null && widget != null)
-				widget.SetToolbar (WorkbenchWindow.GetToolbar (this));
-		}
-		
-		public override void Dispose ()
+		protected override void OnDispose ()
 		{
 			if (widget != null) {
 				widget.Destroy ();
 				widget = null;
 			}
-			if (changedpathstore != null) {
-				changedpathstore.Dispose ();
-				changedpathstore = null;
-			}
 			if (info != null) {
 				info.Updated -= OnInfoUpdated;
 				info = null;
 			}
-			base.Dispose ();
+			base.OnDispose ();
 		}
 
-		#region IAttachableViewContent implementation
-		public void Selected ()
+		public void Init ()
 		{
 			if (info != null && !info.Started) {
 				widget.ShowLoading ();
@@ -119,26 +84,19 @@ namespace MonoDevelop.VersionControl.Views
 			}
 		}
 
-		public void Deselected ()
-		{
-		}
-
-		public void BeforeSave ()
-		{
-		}
-
-		public void BaseContentChanged ()
-		{
-		}
-		#endregion
-
 		[CommandHandler (MonoDevelop.Ide.Commands.EditCommands.Copy)]
 		protected void OnCopy ()
 		{
-			string data = widget.DiffText;
-			if (data == null)
+			string data = widget.GetSelectedText ();
+			if (data == null) {
 				return;
+			}
 
+			CopyToClipboard (data);
+		}
+
+		internal static void CopyToClipboard (string data)
+		{
 			var clipboard = Clipboard.Get (Gdk.Atom.Intern ("CLIPBOARD", false));
 			clipboard.Text = data;
 			clipboard = Clipboard.Get (Gdk.Atom.Intern ("PRIMARY", false));

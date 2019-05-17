@@ -26,20 +26,16 @@
 
 using System;
 using System.Collections.Generic;
-using ICSharpCode.PackageManagement;
 using System.Linq;
 
 namespace MonoDevelop.PackageManagement
 {
-	public class ProjectTargetFrameworkMonitor
+	internal class ProjectTargetFrameworkMonitor
 	{
-		IPackageManagementProjectService projectService;
 		List<MonitoredSolution> monitoredSolutions = new List<MonitoredSolution> ();
 
 		public ProjectTargetFrameworkMonitor (IPackageManagementProjectService projectService)
 		{
-			this.projectService = projectService;
-
 			projectService.SolutionLoaded += SolutionLoaded;
 			projectService.SolutionUnloaded += SolutionUnloaded;
 			projectService.ProjectReloaded += ProjectReloaded;
@@ -47,11 +43,11 @@ namespace MonoDevelop.PackageManagement
 
 		public event EventHandler<ProjectTargetFrameworkChangedEventArgs> ProjectTargetFrameworkChanged;
 
-		protected virtual void OnProjectTargetFrameworkChanged (IDotNetProject project)
+		protected virtual void OnProjectTargetFrameworkChanged (IDotNetProject project, bool isReload = false)
 		{
 			var handler = ProjectTargetFrameworkChanged;
 			if (handler != null) {
-				handler (this, new ProjectTargetFrameworkChangedEventArgs (project));
+				handler (this, new ProjectTargetFrameworkChangedEventArgs (project, isReload));
 			}
 		}
 
@@ -63,10 +59,12 @@ namespace MonoDevelop.PackageManagement
 
 			foreach (IDotNetProject project in monitoredSolution.Projects) {
 				project.Modified -= ProjectModified;
+				project.Saved -= ProjectSaved;
 			}
 			monitoredSolution.Projects.Clear ();
 
 			monitoredSolution.Solution.ProjectAdded -= ProjectAdded;
+			monitoredSolution.Solution.ProjectRemoved -= ProjectRemoved;
 			monitoredSolutions.Remove (monitoredSolution);
 		}
 
@@ -88,6 +86,7 @@ namespace MonoDevelop.PackageManagement
 			var solutionEventArgs = (DotNetSolutionEventArgs)e;
 			ISolution solution = solutionEventArgs.Solution;
 			solution.ProjectAdded += ProjectAdded;
+			solution.ProjectRemoved += ProjectRemoved;
 			List<IDotNetProject> projects = solution.GetAllProjects ().ToList ();
 
 			foreach (IDotNetProject project in projects) {
@@ -110,14 +109,22 @@ namespace MonoDevelop.PackageManagement
 		void ProjectModified (object sender, ProjectModifiedEventArgs e)
 		{
 			if (e.IsTargetFramework ()) {
-				OnProjectTargetFrameworkChanged (e.Project);
+				e.Project.Saved += ProjectSaved;
 			}
+		}
+
+		void ProjectSaved (object sender, EventArgs e)
+		{
+			var project = (IDotNetProject)sender;
+			project.Saved -= ProjectSaved;
+
+			OnProjectTargetFrameworkChanged (project);
 		}
 
 		void ProjectReloaded (object sender, ProjectReloadedEventArgs e)
 		{
 			if (HasTargetFrameworkChanged (e.NewProject, e.OldProject)) {
-				OnProjectTargetFrameworkChanged (e.NewProject);
+				OnProjectTargetFrameworkChanged (e.NewProject, isReload: true);
 			}
 		}
 
@@ -127,6 +134,16 @@ namespace MonoDevelop.PackageManagement
 				return !newProject.TargetFrameworkMoniker.Equals (oldProject.TargetFrameworkMoniker);
 			}
 			return false;
+		}
+
+		void ProjectRemoved (object sender, DotNetProjectEventArgs e)
+		{
+			MonitoredSolution monitoredSolution = FindMonitoredSolution ((ISolution)sender);
+			IDotNetProject matchedProject = monitoredSolution.Projects.FirstOrDefault (project => project.Equals (e.Project));
+			if (matchedProject != null) {
+				matchedProject.Modified -= ProjectModified;
+				monitoredSolution.Projects.Remove (matchedProject);
+			}
 		}
 
 		class MonitoredSolution

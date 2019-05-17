@@ -26,35 +26,49 @@
 using System;
 using MonoDevelop.Ide.Gui;
 using System.Collections.Generic;
+using MonoDevelop.Components;
 using MonoDevelop.Core;
 using MonoDevelop.Ide.Gui.Content;
+using MonoDevelop.Ide.Gui.Documents;
+using MonoDevelop.Ide;
+using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text;
 
 namespace MonoDevelop.VersionControl.Views
 {
-	public interface IDiffView : IAttachableViewContent
+	public interface IDiffView
 	{
 	}
 	
-	public class DiffView : BaseView, IDiffView, IUndoHandler, IClipboardHandler
+	class DiffView : DocumentController, IDiffView, IUndoHandler, IClipboardHandler
 	{
 		DiffWidget widget;
 
-		public override Gtk.Widget Control { 
-			get {
-				if (widget == null) {
-					widget = new DiffWidget (info);
-					
+		void CreateWiget ()
+		{
+			if (widget == null) {
+				widget = new DiffWidget (info);
+
+				try {
 					ComparisonWidget.DiffEditor.Document.Text = info.Item.Repository.GetBaseText (info.Item.Path);
-					ComparisonWidget.SetLocal (ComparisonWidget.OriginalEditor.GetTextEditorData ());
-					widget.ShowAll ();
-					widget.SetToolbar (WorkbenchWindow.GetToolbar (this));
+				} catch (Exception ex) {
+					LoggingService.LogInternalError ("Error fetching text from repository ", ex);
 				}
-				return widget;
+				ComparisonWidget.SetLocal (ComparisonWidget.OriginalEditor.GetTextEditorData ());
+				widget.ShowAll ();
 			}
 		}
-		
+
+		protected override Control OnGetViewControl (DocumentViewContent view)
+		{
+			CreateWiget ();
+			widget.SetToolbar (view.GetToolbar ());
+			return widget;
+		}
+
 		public ComparisonWidget ComparisonWidget {
 			get {
+				CreateWiget ();
 				return this.widget.ComparisonWidget;
 			}
 		}
@@ -66,38 +80,28 @@ namespace MonoDevelop.VersionControl.Views
 		}
 
 		VersionControlDocumentInfo info;
-		public DiffView (VersionControlDocumentInfo info) : base (GettextCatalog.GetString ("Changes"))
+		public DiffView (VersionControlDocumentInfo info)
 		{
 			this.info = info;
-		}
-		
-		public DiffView (VersionControlDocumentInfo info, Revision baseRev, Revision toRev) : base (GettextCatalog.GetString ("Changes"))
-		{
-			this.info = info;
-			widget = new DiffWidget (info);
-			ComparisonWidget.SetRevision (ComparisonWidget.DiffEditor, baseRev);
-			ComparisonWidget.SetRevision (ComparisonWidget.OriginalEditor, toRev);
-			
-			widget.ShowAll ();
 		}
 		
 		#region IAttachableViewContent implementation
 
-		public int GetLineInCenter (Mono.TextEditor.TextEditor editor)
+		public int GetLineInCenter (Mono.TextEditor.MonoTextEditor editor)
 		{
 			double midY = editor.VAdjustment.Value + editor.Allocation.Height / 2;
 			return editor.YToLine (midY);
 		}
 		
-		public void Selected ()
+		protected override void OnFocused ()
 		{
 			info.Start ();
-			ComparisonWidget.UpdateLocalText ();
-			var buffer = info.Document.GetContent<ITextBuffer> ();
-			if (buffer != null) {
-				int line, col;
-				buffer.GetLineColumnFromPosition (buffer.CursorPosition, out line, out col);
-				ComparisonWidget.OriginalEditor.SetCaretTo (line, col);
+			if (ComparisonWidget.originalComboBox.Text == GettextCatalog.GetString ("Local"))
+				ComparisonWidget.UpdateLocalText ();
+			var textView = info.Controller.GetContent<ITextView> ();
+			if (textView != null) {
+				var (line,column) = textView.Caret.Position.BufferPosition.GetLineAndColumn1Based();
+				ComparisonWidget.OriginalEditor.SetCaretTo (line, column);
 			}
 			
 			if (ComparisonWidget.Allocation.Height == 1 && ComparisonWidget.Allocation.Width == 1) {
@@ -112,34 +116,30 @@ namespace MonoDevelop.VersionControl.Views
 		void HandleComparisonWidgetSizeAllocated (object o, Gtk.SizeAllocatedArgs args)
 		{
 			ComparisonWidget.SizeAllocated -= HandleComparisonWidgetSizeAllocated;
-			var sourceEditorView = info.Document.GetContent<MonoDevelop.SourceEditor.SourceEditorView> ();
-			if (sourceEditorView != null) {
-				int line = GetLineInCenter (sourceEditorView.TextEditor);
-				ComparisonWidget.OriginalEditor.CenterTo (line, 1);
+			var textView = info.Controller.GetContent<ITextView> ();
+			if (textView != null) {
+				int firstLineNumber = textView.TextViewLines.FirstVisibleLine.Start.GetContainingLine ().LineNumber;
+				ComparisonWidget.OriginalEditor.VAdjustment.Value = ComparisonWidget.OriginalEditor.LineToY (firstLineNumber + 1);
 				ComparisonWidget.OriginalEditor.GrabFocus ();
 			}
 		}
 		
-		public void Deselected ()
+		protected override void OnUnfocused ()
 		{
-			var sourceEditor = info.Document.GetContent <MonoDevelop.SourceEditor.SourceEditorView> ();
-			if (sourceEditor != null) {
-				sourceEditor.TextEditor.Caret.Location = ComparisonWidget.OriginalEditor.Caret.Location;
-				
+			var textView = info.Controller.GetContent <ITextView> ();
+			if (textView != null) {
+				var pos = ComparisonWidget.OriginalEditor.Caret.Offset;
+				var snapshot = textView.TextSnapshot;
+				var point = new SnapshotPoint (snapshot, Math.Max (0, Math.Min (snapshot.Length - 1, pos)));
+				textView.Caret.MoveTo (point);
+
 				int line = GetLineInCenter (ComparisonWidget.OriginalEditor);
-				if (Math.Abs (GetLineInCenter (sourceEditor.TextEditor) - line) > 2)
-					sourceEditor.TextEditor.CenterTo (line, 1);
+				line = Math.Min (line, snapshot.LineCount);
+				var middleLine = snapshot.GetLineFromLineNumber (line);
+				textView.ViewScroller.EnsureSpanVisible (new SnapshotSpan (textView.TextSnapshot, middleLine.Start, 0), EnsureSpanVisibleOptions.AlwaysCenter);
 			}
 		}
 
-		public void BeforeSave ()
-		{
-		}
-
-		public void BaseContentChanged ()
-		{
-		}
-		
 		#endregion
 		
 		#region IUndoHandler implementation
@@ -221,7 +221,7 @@ namespace MonoDevelop.VersionControl.Views
 				var editor = this.widget.FocusedEditor;
 				if (editor == null)
 					return false;
-				return editor.IsSomethingSelected && !editor.Document.ReadOnly;
+				return editor.IsSomethingSelected && !editor.Document.IsReadOnly;
 			}
 		}
 
@@ -239,7 +239,7 @@ namespace MonoDevelop.VersionControl.Views
 				var editor = this.widget.FocusedEditor;
 				if (editor == null)
 					return false;
-				return !editor.Document.ReadOnly;
+				return !editor.Document.IsReadOnly;
 			}
 		}
 
@@ -248,7 +248,7 @@ namespace MonoDevelop.VersionControl.Views
 				var editor = this.widget.FocusedEditor;
 				if (editor == null)
 					return false;
-				return !editor.Document.ReadOnly;
+				return !editor.Document.IsReadOnly;
 			}
 		}
 

@@ -31,13 +31,11 @@
 
 using System;
 using Gtk;
-using System.Collections.Generic;
 using MonoDevelop.Ide.Gui;
-using Mono.TextEditor;
 
 namespace MonoDevelop.Components.Docking
 {
-	public class DockBar: Gtk.EventBox
+	class DockBar: Gtk.EventBox
 	{
 		Gtk.PositionType position;
 		Box box;
@@ -126,17 +124,22 @@ namespace MonoDevelop.Components.Docking
 			box.PackStart (it, false, false, 0);
 			it.ShowAll ();
 			UpdateVisibility ();
-			it.Shown += OnItemVisibilityChanged;
-			it.Hidden += OnItemVisibilityChanged;
+			it.Shown += OnItemVisibilityShown;
+			it.Hidden += OnItemVisibilityHidden;
 			return it;
 		}
 		
-		void OnItemVisibilityChanged (object o, EventArgs args)
+		void OnItemVisibilityShown (object o, EventArgs args)
 		{
 			DisableHoverActivation ();
 			UpdateVisibility ();
 		}
-		
+
+		void OnItemVisibilityHidden (object o, EventArgs args)
+		{
+			UpdateVisibility ();
+		}
+
 		internal void OnCompactLevelChanged ()
 		{
 			UpdateVisibility ();
@@ -163,8 +166,8 @@ namespace MonoDevelop.Components.Docking
 		{
 			DisableHoverActivation ();
 			box.Remove (it);
-			it.Shown -= OnItemVisibilityChanged;
-			it.Hidden -= OnItemVisibilityChanged;
+			it.Shown -= OnItemVisibilityShown;
+			it.Hidden -= OnItemVisibilityHidden;
 			UpdateVisibility ();
 		}
 
@@ -215,29 +218,8 @@ namespace MonoDevelop.Components.Docking
 			var alloc = Allocation;
 			using (var ctx = Gdk.CairoHelper.Create (GdkWindow)) {
 				ctx.Rectangle (alloc.X, alloc.Y, alloc.X + alloc.Width, alloc.Y + alloc.Height);
-				Cairo.LinearGradient gr;
-				if (Orientation == Gtk.Orientation.Vertical)
-					gr = new Cairo.LinearGradient (alloc.X, alloc.Y, alloc.X + alloc.Width, alloc.Y);
-				else
-					gr = new Cairo.LinearGradient (alloc.X, alloc.Y, alloc.X, alloc.Y + alloc.Height);
-				using (gr) {
-					gr.AddColorStop (0, Styles.DockBarBackground1);
-					gr.AddColorStop (1, Styles.DockBarBackground2);
-					ctx.SetSource (gr);
-				}
+				ctx.SetSourceColor (Styles.DockBarBackground.ToCairoColor ());
 				ctx.Fill ();
-
-				// Light shadow
-				double offs = ShowBorder ? 1.5 : 0.5;
-				switch (Position) {
-				case PositionType.Left:ctx.MoveTo (alloc.X + alloc.Width - offs, alloc.Y); ctx.RelLineTo (0, Allocation.Height); break;
-				case PositionType.Right: ctx.MoveTo (alloc.X + offs, alloc.Y); ctx.RelLineTo (0, Allocation.Height); break;
-				case PositionType.Top: ctx.MoveTo (alloc.X, alloc.Y + alloc.Height - offs); ctx.RelLineTo (Allocation.Width, 0); break;
-				case PositionType.Bottom: ctx.MoveTo (alloc.X, alloc.Y + offs); ctx.RelLineTo (Allocation.Width, 0); break;
-				}
-				ctx.LineWidth = 1;
-				ctx.SetSourceColor (Styles.DockBarSeparatorColorLight);
-				ctx.Stroke ();
 			}
 
 			if (Child != null)
